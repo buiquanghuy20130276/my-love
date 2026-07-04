@@ -35,6 +35,30 @@ const eventDetail = ref<TimelineEvent | null>(null)
 const eventImages = ref<ImageItem[]>([])
 const loading = ref(true)
 
+// Custom Confirm Modal state
+const showConfirmModal = ref(false)
+const confirmModalTitle = ref('')
+const confirmModalMessage = ref('')
+const confirmModalAction = ref<(() => Promise<void>) | null>(null)
+
+function openConfirmModal(title: string, message: string, action: () => Promise<void>) {
+  confirmModalTitle.value = title
+  confirmModalMessage.value = message
+  confirmModalAction.value = action
+  showConfirmModal.value = true
+}
+
+async function triggerConfirmModalAction() {
+  if (confirmModalAction.value) {
+    try {
+      await confirmModalAction.value()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+  showConfirmModal.value = false
+}
+
 interface Comment {
   id: string
   timeline_event_id: string
@@ -170,22 +194,25 @@ async function sendComment() {
   }
 }
 
-async function deleteComment(commentId: string) {
-  const confirmDelete = confirm('Bạn có muốn xóa bình luận này không?')
-  if (!confirmDelete) return
+function deleteComment(commentId: string) {
+  openConfirmModal(
+    'Xóa bình luận',
+    'Bạn có chắc chắn muốn xóa bình luận này không?',
+    async () => {
+      try {
+        const { error } = await supabase
+          .from('timeline_comments')
+          .delete()
+          .eq('id', commentId)
 
-  try {
-    const { error } = await supabase
-      .from('timeline_comments')
-      .delete()
-      .eq('id', commentId)
-
-    if (error) throw error
-    comments.value = comments.value.filter(c => c.id !== commentId)
-    toast.success('Đã xóa bình luận!')
-  } catch (err: any) {
-    toast.error('Lỗi khi xóa bình luận: ' + err.message)
-  }
+        if (error) throw error
+        comments.value = comments.value.filter(c => c.id !== commentId)
+        toast.success('Đã xóa bình luận!')
+      } catch (err: any) {
+        toast.error('Lỗi khi xóa bình luận: ' + err.message)
+      }
+    }
+  )
 }
 
 onMounted(() => {
@@ -378,10 +405,45 @@ watch(
           <div v-else class="text-[10px] text-text-muted/40 text-right">Cuối dòng thời gian</div>
         </footer>
 
-      </div>
+      <!-- Custom Popup Confirm Modal -->
+      <transition name="fade">
+        <div 
+          v-if="showConfirmModal"
+          class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          @click.self="showConfirmModal = false"
+        >
+          <div class="w-full max-w-[280px] bg-[#FDFBF7] dark:bg-[#1F1C18] border border-cream-200 dark:border-cream-950/40 rounded-3xl p-5 shadow-2xl text-center space-y-4 text-[#4B2F15] dark:text-[#E2CBB2]">
+            <div class="space-y-1.5">
+              <h3 class="text-sm font-bold text-gray-900 dark:text-gray-100">
+                {{ confirmModalTitle }}
+              </h3>
+              <p class="text-xs text-text-secondary leading-relaxed">
+                {{ confirmModalMessage }}
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <button 
+                type="button"
+                @click="showConfirmModal = false"
+                class="flex-1 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs font-semibold py-2 rounded-xl border border-[#EBE6DC] dark:border-transparent cursor-pointer transition text-gray-800 dark:text-gray-200"
+              >
+                Hủy
+              </button>
+              <button 
+                type="button"
+                @click="triggerConfirmModalAction"
+                class="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-2 rounded-xl shadow-lg cursor-pointer transition"
+              >
+                Xác nhận
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
 
     </div>
   </div>
+</div>
 </template>
 
 <style>

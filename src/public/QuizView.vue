@@ -66,8 +66,30 @@ const mySingleSelection = ref<number | null>(null)
 const myEssayAnswer = ref('') // for essay quiz answering
 const submittingAnswer = ref(false)
 const isEditingAnswer = ref(false)
-const deletingAnswerId = ref<string | null>(null)
-const deletingCommentId = ref<string | null>(null)
+
+// Custom Confirm Modal state
+const showConfirmModal = ref(false)
+const confirmModalTitle = ref('')
+const confirmModalMessage = ref('')
+const confirmModalAction = ref<(() => Promise<void>) | null>(null)
+
+function openConfirmModal(title: string, message: string, action: () => Promise<void>) {
+  confirmModalTitle.value = title
+  confirmModalMessage.value = message
+  confirmModalAction.value = action
+  showConfirmModal.value = true
+}
+
+async function triggerConfirmModalAction() {
+  if (confirmModalAction.value) {
+    try {
+      await confirmModalAction.value()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+  showConfirmModal.value = false
+}
 
 function isAnswerEditable(questionId: string) {
   const ans = myAnswers.value[questionId]
@@ -183,8 +205,7 @@ async function openQuestionDetail(q: QuizQuestion) {
   myEssayAnswer.value = ''
   activeAnswers.value = []
   activeComments.value = []
-  deletingAnswerId.value = null
-  deletingCommentId.value = null
+  showConfirmModal.value = false
 
   // Pre-fill answer if already answered
   const myAns = myAnswers.value[q.id]
@@ -332,55 +353,65 @@ async function sendQuizComment() {
   }
 }
 
-// Delete Comment for Essay (Inline Confirm)
-async function confirmDeleteComment(commentId: string) {
-  try {
-    console.log('Sending delete request to Supabase for comment:', commentId)
-    const { data, error, status } = await supabase
-      .from('quiz_comments')
-      .delete()
-      .eq('id', commentId)
-      .select()
+// Delete Comment (custom popup trigger)
+function deleteQuizComment(commentId: string) {
+  openConfirmModal(
+    'Xóa bình luận',
+    'Bạn có chắc chắn muốn xóa bình luận này không?',
+    async () => {
+      try {
+        console.log('Sending delete request to Supabase for comment:', commentId)
+        const { data, error, status } = await supabase
+          .from('quiz_comments')
+          .delete()
+          .eq('id', commentId)
+          .select()
 
-    console.log('Supabase delete comment response status:', status, 'data:', data, 'error:', error)
-    if (error) throw error
-    activeComments.value = activeComments.value.filter(c => c.id !== commentId)
-    deletingCommentId.value = null
-    toast.success('Đã xóa bình luận!')
-  } catch (err: any) {
-    console.error('confirmDeleteComment catch block error:', err)
-    toast.error('Lỗi khi xóa bình luận: ' + err.message)
-  }
+        console.log('Supabase delete comment response status:', status, 'data:', data, 'error:', error)
+        if (error) throw error
+        activeComments.value = activeComments.value.filter(c => c.id !== commentId)
+        toast.success('Đã xóa bình luận!')
+      } catch (err: any) {
+        console.error('deleteQuizComment error:', err)
+        toast.error('Lỗi khi xóa bình luận: ' + err.message)
+      }
+    }
+  )
 }
 
-// Delete Answer (Inline Confirm)
-async function confirmDeleteAnswer(answerId: string) {
-  try {
-    console.log('Sending delete request to Supabase for ID:', answerId)
-    const { data, error, status } = await supabase
-      .from('quiz_answers')
-      .delete()
-      .eq('id', answerId)
-      .select()
+// Delete Answer (custom popup trigger)
+function deleteAnswer(answerId: string) {
+  openConfirmModal(
+    'Xóa câu trả lời',
+    'Bạn có chắc chắn muốn xóa câu trả lời này? Bạn có thể nộp lại đáp án khác sau khi xóa.',
+    async () => {
+      try {
+        console.log('Sending delete request to Supabase for ID:', answerId)
+        const { data, error, status } = await supabase
+          .from('quiz_answers')
+          .delete()
+          .eq('id', answerId)
+          .select()
 
-    console.log('Supabase delete response status:', status, 'data:', data, 'error:', error)
-    if (error) throw error
-    
-    if (activeQuestion.value) {
-      console.log('Updating local active answers...')
-      delete myAnswers.value[activeQuestion.value.id]
-      activeAnswers.value = activeAnswers.value.filter(a => a.id !== answerId)
+        console.log('Supabase delete response status:', status, 'data:', data, 'error:', error)
+        if (error) throw error
+        
+        if (activeQuestion.value) {
+          console.log('Updating local active answers...')
+          delete myAnswers.value[activeQuestion.value.id]
+          activeAnswers.value = activeAnswers.value.filter(a => a.id !== answerId)
+        }
+        isEditingAnswer.value = false
+        toast.success('Đã xóa câu trả lời thành công!')
+        console.log('Calling loadQuizData()...')
+        await loadQuizData()
+        console.log('loadQuizData finished!')
+      } catch (err: any) {
+        console.error('deleteAnswer error:', err)
+        toast.error('Lỗi khi xóa câu trả lời: ' + err.message)
+      }
     }
-    isEditingAnswer.value = false
-    deletingAnswerId.value = null
-    toast.success('Đã xóa câu trả lời thành công!')
-    console.log('Calling loadQuizData()...')
-    await loadQuizData()
-    console.log('loadQuizData finished!')
-  } catch (err: any) {
-    console.error('confirmDeleteAnswer catch block error:', err)
-    toast.error('Lỗi khi xóa câu trả lời: ' + err.message)
-  }
+  )
 }
 
 // Format Date
@@ -736,40 +767,23 @@ onMounted(() => {
 
                     <!-- Owner Controls -->
                     <div v-if="ans.profile_id === authStore.user?.id" class="flex items-center gap-2 select-none text-[10px]">
-                      <template v-if="deletingAnswerId === ans.id">
-                        <span class="text-text-secondary select-none">Xóa chứ?</span>
-                        <button 
-                          @click.stop="confirmDeleteAnswer(ans.id)"
-                          class="text-red-500 font-bold hover:underline cursor-pointer px-1"
-                        >
-                          Có
-                        </button>
-                        <button 
-                          @click.stop="deletingAnswerId = null"
-                          class="text-gray-500 font-bold hover:underline cursor-pointer px-1"
-                        >
-                          Không
-                        </button>
-                      </template>
-                      <template v-else>
-                        <button 
-                          v-if="isAnswerEditable(activeQuestion.id)"
-                          @click.stop="isEditingAnswer = true"
-                          class="text-[#D4537E] hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
-                          title="Sửa câu trả lời"
-                        >
-                          <i class="ti ti-edit"></i>
-                          <span>Sửa</span>
-                        </button>
-                        <button 
-                          @click.stop="deletingAnswerId = ans.id"
-                          class="text-red-500 hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
-                          title="Xóa câu trả lời"
-                        >
-                          <i class="ti ti-trash"></i>
-                          <span>Xóa</span>
-                        </button>
-                      </template>
+                      <button 
+                        v-if="isAnswerEditable(activeQuestion.id)"
+                        @click.stop="isEditingAnswer = true"
+                        class="text-[#D4537E] hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
+                        title="Sửa câu trả lời"
+                      >
+                        <i class="ti ti-edit"></i>
+                        <span>Sửa</span>
+                      </button>
+                      <button 
+                        @click.stop="deleteAnswer(ans.id)"
+                        class="text-red-500 hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
+                        title="Xóa câu trả lời"
+                      >
+                        <i class="ti ti-trash"></i>
+                        <span>Xóa</span>
+                      </button>
                     </div>
                   </div>
 
@@ -825,36 +839,15 @@ onMounted(() => {
                         </span>
                       </div>
                       
-                      <!-- Custom Inline Delete for comments -->
-                      <div 
+                      <!-- Comment Delete button -->
+                      <button 
                         v-if="c.profile_id === authStore.user?.id || authStore.role === 'admin' || authStore.user?.email === 'quanghuy@love.com'"
-                        class="flex items-center gap-1.5 select-none text-[10px]"
+                        @click.stop="deleteQuizComment(c.id)"
+                        class="text-red-500 hover:text-red-600 cursor-pointer p-1"
+                        title="Xóa bình luận"
                       >
-                        <template v-if="deletingCommentId === c.id">
-                          <span class="text-text-secondary select-none">Xóa?</span>
-                          <button 
-                            @click.stop="confirmDeleteComment(c.id)"
-                            class="text-red-500 font-bold hover:underline cursor-pointer px-1"
-                          >
-                            Có
-                          </button>
-                          <button 
-                            @click.stop="deletingCommentId = null"
-                            class="text-gray-500 font-bold hover:underline cursor-pointer px-1"
-                          >
-                            Không
-                          </button>
-                        </template>
-                        <template v-else>
-                          <button 
-                            @click.stop="deletingCommentId = c.id"
-                            class="text-red-500 hover:text-red-600 cursor-pointer p-1"
-                            title="Xóa bình luận"
-                          >
-                            <i class="ti ti-trash text-[11px]"></i>
-                          </button>
-                        </template>
-                      </div>
+                        <i class="ti ti-trash text-[11px]"></i>
+                      </button>
                     </div>
                     <p class="text-gray-700 dark:text-gray-300 leading-normal whitespace-pre-wrap">
                       {{ c.content }}
@@ -890,6 +883,42 @@ onMounted(() => {
 
           </div>
 
+        </div>
+      </div>
+    </transition>
+
+    <!-- Custom Popup Confirm Modal -->
+    <transition name="fade">
+      <div 
+        v-if="showConfirmModal"
+        class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+        @click.self="showConfirmModal = false"
+      >
+        <div class="w-full max-w-[280px] bg-[#FDFBF7] dark:bg-[#1F1C18] border border-cream-200 dark:border-cream-950/40 rounded-3xl p-5 shadow-2xl text-center space-y-4 text-[#4B2F15] dark:text-[#E2CBB2]">
+          <div class="space-y-1.5">
+            <h3 class="text-sm font-bold text-gray-900 dark:text-gray-100">
+              {{ confirmModalTitle }}
+            </h3>
+            <p class="text-xs text-text-secondary leading-relaxed">
+              {{ confirmModalMessage }}
+            </p>
+          </div>
+          <div class="flex gap-2">
+            <button 
+              type="button"
+              @click="showConfirmModal = false"
+              class="flex-1 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs font-semibold py-2 rounded-xl border border-[#EBE6DC] dark:border-transparent cursor-pointer transition text-gray-800 dark:text-gray-200"
+            >
+              Hủy
+            </button>
+            <button 
+              type="button"
+              @click="triggerConfirmModalAction"
+              class="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold py-2 rounded-xl shadow-lg cursor-pointer transition"
+            >
+              Xác nhận
+            </button>
+          </div>
         </div>
       </div>
     </transition>
