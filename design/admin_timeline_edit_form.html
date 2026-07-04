@@ -1,0 +1,79 @@
+<div style="display: flex; gap: 0; border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden;">
+
+  <div style="width: 180px; background: var(--surface-1); padding: 16px 12px; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px; padding: 0 4px;">
+      <i class="ti ti-heart" style="font-size: 18px; color: #D4537E;" aria-hidden="true"></i>
+      <span style="font-size: 13px; font-weight: 500;">Admin</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-mail-heart" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Thư xin lỗi</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius); background: #FBEAF0;">
+        <i class="ti ti-timeline" style="font-size: 16px; color: #993556;" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: #72243E;">Dòng thời gian</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-map-pin" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Bản đồ tình yêu</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-settings" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Cài đặt</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex: 1; background: var(--surface-2); padding: 20px 24px; min-width: 0;">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 18px;">
+      <i class="ti ti-arrow-left" style="font-size: 16px; color: var(--text-muted);" aria-hidden="true"></i>
+      <h2 style="font-size: 16px; font-weight: 500; margin: 0;">Chỉnh sửa mốc thời gian</h2>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; margin-bottom: 14px;">
+      <div>
+        <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 5px;">Tiêu đề</label>
+        <input type="text" value="Lần đầu gặp nhau" style="width: 100%;" />
+      </div>
+      <div>
+        <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 5px;">Ngày</label>
+        <input type="text" value="14/03/2025" style="width: 100%;" />
+      </div>
+    </div>
+
+    <div style="margin-bottom: 14px;">
+      <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 5px;">Mô tả</label>
+      <textarea rows="3" style="width: 100%; resize: none;">Buổi chiều hôm đó ở quán cà phê nhỏ...</textarea>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+      <input type="checkbox" checked id="special" />
+      <label for="special" style="font-size: 13px;">Đánh dấu là cột mốc đặc biệt</label>
+    </div>
+
+    <label style="font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 6px;">Hình ảnh</label>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-bottom: 18px;">
+      <div style="aspect-ratio: 1; border-radius: 8px; background: var(--surface-1); position: relative; display: flex; align-items: center; justify-content: center;">
+        <i class="ti ti-photo" style="font-size: 16px; color: var(--text-muted);" aria-hidden="true"></i>
+        <i class="ti ti-x" style="position: absolute; top: 3px; right: 3px; font-size: 12px; color: var(--text-muted);" aria-hidden="true"></i>
+      </div>
+      <div style="aspect-ratio: 1; border-radius: 8px; background: var(--surface-1); position: relative; display: flex; align-items: center; justify-content: center;">
+        <i class="ti ti-photo" style="font-size: 16px; color: var(--text-muted);" aria-hidden="true"></i>
+        <i class="ti ti-x" style="position: absolute; top: 3px; right: 3px; font-size: 12px; color: var(--text-muted);" aria-hidden="true"></i>
+      </div>
+      <div style="aspect-ratio: 1; border-radius: 8px; background: var(--surface-1); position: relative; display: flex; align-items: center; justify-content: center;">
+        <i class="ti ti-photo" style="font-size: 16px; color: var(--text-muted);" aria-hidden="true"></i>
+        <i class="ti ti-x" style="position: absolute; top: 3px; right: 3px; font-size: 12px; color: var(--text-muted);" aria-hidden="true"></i>
+      </div>
+      <div style="aspect-ratio: 1; border-radius: 8px; border: 1px dashed var(--border-strong); display: flex; align-items: center; justify-content: center;">
+        <i class="ti ti-plus" style="font-size: 18px; color: var(--text-muted);" aria-hidden="true"></i>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; gap: 8px;">
+      <button style="font-size: 13px; padding: 7px 14px;">Hủy</button>
+      <button style="background: #D4537E; color: white; border: none; font-size: 13px; padding: 7px 16px; border-radius: var(--radius);">Lưu thay đổi</button>
+    </div>
+  </div>
+</div>

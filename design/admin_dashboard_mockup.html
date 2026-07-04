@@ -1,0 +1,78 @@
+<div style="display: flex; gap: 0; border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden;">
+
+  <div style="width: 180px; background: var(--surface-1); padding: 16px 12px; flex-shrink: 0;">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px; padding: 0 4px;">
+      <i class="ti ti-heart" style="font-size: 18px; color: #D4537E;" aria-hidden="true"></i>
+      <span style="font-size: 13px; font-weight: 500;">Admin</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius); background: #FBEAF0;">
+        <i class="ti ti-mail-heart" style="font-size: 16px; color: #993556;" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: #72243E;">Thư xin lỗi</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-timeline" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Dòng thời gian</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-map-pin" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Bản đồ tình yêu</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius);">
+        <i class="ti ti-settings" style="font-size: 16px; color: var(--text-secondary);" aria-hidden="true"></i>
+        <span style="font-size: 13px; color: var(--text-secondary);">Cài đặt</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex: 1; background: var(--surface-2); padding: 20px 24px; min-width: 0;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
+      <h2 style="font-size: 16px; font-weight: 500; margin: 0;">Thư xin lỗi</h2>
+      <button style="background: #D4537E; color: white; border: none; font-size: 13px; padding: 7px 14px; border-radius: var(--radius); display: flex; align-items: center; gap: 6px;">
+        <i class="ti ti-plus" style="font-size: 14px;" aria-hidden="true"></i>Viết thư mới
+      </button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-bottom: 20px;">
+      <div style="background: var(--surface-1); border-radius: var(--radius); padding: 12px;">
+        <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 4px;">Tổng số thư</p>
+        <p style="font-size: 20px; font-weight: 500; margin: 0;">14</p>
+      </div>
+      <div style="background: var(--surface-1); border-radius: var(--radius); padding: 12px;">
+        <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 4px;">Đã đăng</p>
+        <p style="font-size: 20px; font-weight: 500; margin: 0;">9</p>
+      </div>
+      <div style="background: var(--surface-1); border-radius: var(--radius); padding: 12px;">
+        <p style="font-size: 12px; color: var(--text-secondary); margin: 0 0 4px;">Bản nháp</p>
+        <p style="font-size: 20px; font-weight: 500; margin: 0;">5</p>
+      </div>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed;">
+      <tr style="border-bottom: 0.5px solid var(--border);">
+        <td style="padding: 8px 6px; color: var(--text-secondary); width: 45%;">Tiêu đề</td>
+        <td style="padding: 8px 6px; color: var(--text-secondary); width: 20%;">Nhãn</td>
+        <td style="padding: 8px 6px; color: var(--text-secondary); width: 20%;">Trạng thái</td>
+        <td style="padding: 8px 6px; color: var(--text-secondary); width: 15%;"></td>
+      </tr>
+      <tr style="border-bottom: 0.5px solid var(--border);">
+        <td style="padding: 10px 6px;">Xin lỗi vì đã im lặng</td>
+        <td style="padding: 10px 6px; color: var(--text-secondary);">Xin lỗi</td>
+        <td style="padding: 10px 6px;"><span style="background: var(--bg-success); color: var(--text-success); font-size: 11px; padding: 3px 8px; border-radius: 999px;">Đã đăng</span></td>
+        <td style="padding: 10px 6px; text-align: right;"><i class="ti ti-edit" style="font-size: 15px; color: var(--text-muted);" aria-hidden="true"></i></td>
+      </tr>
+      <tr style="border-bottom: 0.5px solid var(--border);">
+        <td style="padding: 10px 6px;">Lời hứa cho năm sau</td>
+        <td style="padding: 10px 6px; color: var(--text-secondary);">Lời hứa</td>
+        <td style="padding: 10px 6px;"><span style="background: var(--bg-success); color: var(--text-success); font-size: 11px; padding: 3px 8px; border-radius: 999px;">Đã đăng</span></td>
+        <td style="padding: 10px 6px; text-align: right;"><i class="ti ti-edit" style="font-size: 15px; color: var(--text-muted);" aria-hidden="true"></i></td>
+      </tr>
+      <tr>
+        <td style="padding: 10px 6px;">Thư bí mật tháng 8</td>
+        <td style="padding: 10px 6px; color: var(--text-secondary);">Nhớ em</td>
+        <td style="padding: 10px 6px;"><span style="background: var(--surface-1); color: var(--text-secondary); font-size: 11px; padding: 3px 8px; border-radius: 999px;">Nháp</span></td>
+        <td style="padding: 10px 6px; text-align: right;"><i class="ti ti-edit" style="font-size: 15px; color: var(--text-muted);" aria-hidden="true"></i></td>
+      </tr>
+    </table>
+  </div>
+</div>
