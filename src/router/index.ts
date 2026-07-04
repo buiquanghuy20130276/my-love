@@ -8,6 +8,7 @@ import LettersView from '../public/LettersView.vue'
 import TimelineDetailView from '../public/TimelineDetailView.vue'
 import LoveMapView from '../public/LoveMapView.vue'
 import GalleryView from '../public/GalleryView.vue'
+import QuizView from '../public/QuizView.vue'
 
 // Admin Views
 import AdminLayout from '../admin/AdminLayout.vue'
@@ -58,6 +59,12 @@ const router = createRouter({
       path: '/gallery',
       name: 'gallery',
       component: GalleryView,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/quiz',
+      name: 'quiz',
+      component: QuizView,
       meta: { requiresAuth: true }
     },
     // Admin routes wrapped in AdminLayout

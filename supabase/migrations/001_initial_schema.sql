@@ -359,8 +359,87 @@ create policy "Users can delete their own comments or admins can delete any"
   to authenticated
   using (
     auth.uid() = profile_id 
-    or public.current_user_role() = 'admin'
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
+
+-- ==========================================
+-- 6. QUIZ ALTERATIONS & ANSWERS/COMMENTS SETUP (PHASE 8f)
+-- ==========================================
+-- Add quiz_type, created_by, and make constraints nullable for essay quizzes
+alter table public.quiz_questions 
+  add column if not exists created_by uuid references public.profiles(id) on delete cascade,
+  add column if not exists quiz_type text not null default 'single' check (quiz_type in ('essay', 'single', 'multiple')),
+  alter column options drop not null,
+  alter column correct_index drop not null;
+
+-- Re-create quiz_questions policies to allow both admin & partner to create quizzes for each other
+drop policy if exists "Admins can manage quiz questions" on public.quiz_questions;
+create policy "Authenticated users can manage quiz questions"
+  on public.quiz_questions for all
+  to authenticated
+  using (true);
+
+-- Create Quiz Answers table
+create table if not exists public.quiz_answers (
+  id uuid default gen_random_uuid() primary key,
+  question_id uuid references public.quiz_questions(id) on delete cascade not null,
+  profile_id uuid references public.profiles(id) on delete cascade not null,
+  selected_options jsonb, -- Array of choice indexes, e.g., [0, 2]
+  essay_answer text, -- Free text essay response
+  created_at timestamptz default now() not null,
+  unique(question_id, profile_id)
+);
+
+-- Enable RLS on quiz_answers
+alter table public.quiz_answers enable row level security;
+
+-- Policies for quiz_answers
+create policy "Authenticated users can view quiz answers"
+  on public.quiz_answers for select
+  to authenticated
+  using (true);
+
+create policy "Authenticated users can insert quiz answers"
+  on public.quiz_answers for insert
+  to authenticated
+  with check (auth.uid() = profile_id);
+
+create policy "Authenticated users can update quiz answers"
+  on public.quiz_answers for update
+  to authenticated
+  using (auth.uid() = profile_id);
+
+-- Create Quiz Comments table (for discussion under essay questions)
+create table if not exists public.quiz_comments (
+  id uuid default gen_random_uuid() primary key,
+  question_id uuid references public.quiz_questions(id) on delete cascade not null,
+  profile_id uuid references public.profiles(id) on delete cascade not null,
+  content text not null,
+  created_at timestamptz default now() not null
+);
+
+-- Enable RLS on quiz_comments
+alter table public.quiz_comments enable row level security;
+
+-- Policies for quiz_comments
+create policy "Authenticated users can view quiz comments"
+  on public.quiz_comments for select
+  to authenticated
+  using (true);
+
+create policy "Authenticated users can insert quiz comments"
+  on public.quiz_comments for insert
+  to authenticated
+  with check (auth.uid() = profile_id);
+
+create policy "Users can delete their own quiz comments or admins can delete any"
+  on public.quiz_comments for delete
+  to authenticated
+  using (
+    auth.uid() = profile_id 
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
 
 
 

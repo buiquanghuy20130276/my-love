@@ -40,6 +40,16 @@ const currentPath = computed(() => route.path)
       <span class="text-[10px] font-medium mt-1">Bản đồ</span>
     </RouterLink>
 
+    <!-- Quiz Tab -->
+    <RouterLink 
+      to="/quiz" 
+      class="flex-1 flex flex-col items-center justify-center transition"
+      :class="currentPath === '/quiz' ? 'text-[#D4537E]' : 'text-text-muted hover:text-text-secondary'"
+    >
+      <i class="ti ti-brain text-[22px] leading-none"></i>
+      <span class="text-[10px] font-medium mt-1">Câu đố</span>
+    </RouterLink>
+
     <!-- Gallery Tab -->
     <RouterLink 
       to="/gallery" 
