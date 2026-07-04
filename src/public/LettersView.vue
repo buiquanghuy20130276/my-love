@@ -28,6 +28,97 @@ const selectedTag = ref('Tất cả')
 const activeLetter = ref<Letter | null>(null)
 const isOpening = ref(false)
 
+interface Comment {
+  id: string
+  letter_id: string
+  profile_id: string
+  content: string
+  created_at: string
+  profiles: {
+    display_name: string
+    role: string
+  } | null
+}
+
+const comments = ref<Comment[]>([])
+const loadingComments = ref(false)
+const newComment = ref('')
+const submittingComment = ref(false)
+
+async function fetchComments(letterId: string) {
+  loadingComments.value = true
+  try {
+    const { data, error } = await supabase
+      .from('letter_comments')
+      .select('id, letter_id, profile_id, content, created_at, profiles(display_name, role)')
+      .eq('letter_id', letterId)
+      .order('created_at', { ascending: true })
+
+    if (error) throw error
+    
+    // Normalize profiles relation from array to single object if needed
+    const normalized = (data || []).map((c: any) => ({
+      ...c,
+      profiles: Array.isArray(c.profiles) ? c.profiles[0] : c.profiles
+    }))
+    comments.value = normalized
+  } catch (err: any) {
+    console.error('Lỗi khi tải bình luận:', err.message)
+  } finally {
+    loadingComments.value = false
+  }
+}
+
+async function sendComment() {
+  if (!newComment.value.trim() || !activeLetter.value) return
+  submittingComment.value = true
+
+  try {
+    const { data, error } = await supabase
+      .from('letter_comments')
+      .insert([{
+        letter_id: activeLetter.value.id,
+        profile_id: authStore.user?.id,
+        content: newComment.value.trim()
+      }])
+      .select('id, letter_id, profile_id, content, created_at, profiles(display_name, role)')
+      .single()
+
+    if (error) throw error
+    
+    // Normalize profile relation
+    const normalized = {
+      ...data,
+      profiles: Array.isArray((data as any).profiles) ? (data as any).profiles[0] : (data as any).profiles
+    }
+    comments.value.push(normalized)
+    newComment.value = ''
+    toast.success('Gửi bình luận thành công!')
+  } catch (err: any) {
+    toast.error('Lỗi khi gửi bình luận: ' + err.message)
+  } finally {
+    submittingComment.value = false
+  }
+}
+
+async function deleteComment(commentId: string) {
+  const confirmDelete = confirm('Bạn có muốn xóa bình luận này không?')
+  if (!confirmDelete) return
+
+  try {
+    const { error } = await supabase
+      .from('letter_comments')
+      .delete()
+      .eq('id', commentId)
+
+    if (error) throw error
+    comments.value = comments.value.filter(c => c.id !== commentId)
+    toast.success('Đã xóa bình luận!')
+  } catch (err: any) {
+    toast.error('Lỗi khi xóa bình luận: ' + err.message)
+  }
+}
+
 // Fetch letters from the secure view
 async function loadLetters() {
   loading.value = true
@@ -73,6 +164,8 @@ function openLetter(letter: Letter) {
   
   isOpening.value = true
   activeLetter.value = letter
+  comments.value = []
+  fetchComments(letter.id)
 }
 
 function closeLetter() {
@@ -233,6 +326,85 @@ onMounted(() => {
             <!-- Footer signature -->
             <div class="mt-6 pt-4 border-t border-[#EAE6DD] dark:border-[#2C2924] text-right font-serif text-[11px] text-gray-500 dark:text-gray-400">
               Yêu em thật nhiều, Quang Huy ❤️
+            </div>
+
+            <!-- Comments section -->
+            <div class="mt-8 pt-6 border-t border-[#EAE6DD] dark:border-[#2C2924] text-left">
+              <h3 class="text-xs font-bold uppercase tracking-wider mb-4 text-[#4B2F15] dark:text-[#E2CBB2] flex items-center gap-1.5 select-none">
+                <i class="ti ti-messages"></i>
+                <span>Bình luận & phản hồi</span>
+              </h3>
+
+              <!-- Comments list -->
+              <div v-if="loadingComments" class="flex justify-center py-4">
+                <i class="ti ti-loader animate-spin text-lg text-romantic-500"></i>
+              </div>
+              <div v-else-if="comments.length === 0" class="text-center py-4 text-[11px] text-gray-400 dark:text-gray-500 italic select-none">
+                Chưa có phản hồi nào. Hãy viết phản hồi gửi đối phương nhé!
+              </div>
+              <div v-else class="space-y-3 mb-4 max-h-[220px] overflow-y-auto pr-1 no-scrollbar">
+                <div 
+                  v-for="comment in comments" 
+                  :key="comment.id"
+                  class="bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent p-2.5 rounded-2xl relative group"
+                >
+                  <!-- Author & Date -->
+                  <div class="flex items-center justify-between gap-2 mb-1">
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-[11px] font-bold text-gray-800 dark:text-gray-200">
+                        {{ comment.profiles?.display_name || 'Người dùng' }}
+                      </span>
+                      <!-- Cute Role Badge -->
+                      <span 
+                        class="text-[8px] px-1 rounded font-semibold select-none"
+                        :class="comment.profiles?.role === 'admin' 
+                          ? 'bg-[#E3EFFD] text-[#1E40AF]' 
+                          : 'bg-[#FDF2F8] text-[#9D174D]'"
+                      >
+                        {{ comment.profiles?.role === 'admin' ? 'Anh ❤️' : 'Em 🌸' }}
+                      </span>
+                    </div>
+                    
+                    <!-- Delete button -->
+                    <button 
+                      v-if="comment.profile_id === authStore.user?.id || authStore.role === 'admin'"
+                      @click="deleteComment(comment.id)"
+                      class="text-[10px] text-red-500 opacity-60 hover:opacity-100 cursor-pointer p-0.5 md:opacity-0 md:group-hover:opacity-100 transition"
+                      title="Xóa bình luận"
+                    >
+                      <i class="ti ti-trash"></i>
+                    </button>
+                  </div>
+
+                  <!-- Content -->
+                  <p class="text-[12px] text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
+                    {{ comment.content }}
+                  </p>
+                  <p class="text-[8px] text-gray-400 mt-1 select-none text-right">
+                    {{ formatDate(comment.created_at) }}
+                  </p>
+                </div>
+              </div>
+
+              <!-- Input form -->
+              <div class="flex gap-2 mt-4 items-end">
+                <textarea 
+                  v-model="newComment"
+                  rows="1"
+                  placeholder="Gửi phản hồi của bạn..."
+                  class="flex-1 text-xs p-2 bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent rounded-xl focus:outline-none resize-none font-sans text-gray-800 dark:text-gray-200 leading-snug"
+                  @keyup.enter.prevent="sendComment"
+                  :disabled="submittingComment"
+                ></textarea>
+                <button 
+                  @click="sendComment"
+                  class="bg-[#D4537E] hover:bg-[#c2436d] text-white p-2 rounded-xl flex items-center justify-center cursor-pointer transition disabled:opacity-50 h-8 w-8"
+                  :disabled="submittingComment || !newComment.trim()"
+                >
+                  <i v-if="submittingComment" class="ti ti-loader animate-spin text-sm"></i>
+                  <i v-else class="ti ti-send text-sm"></i>
+                </button>
+              </div>
             </div>
 
           </div>

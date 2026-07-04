@@ -329,4 +329,38 @@ create policy "Admins can manage gallery media objects"
   to authenticated
   using (bucket_id = 'gallery-media' and public.current_user_role() = 'admin');
 
+-- ==========================================
+-- 5. LETTER COMMENTS TABLE SETUP (PHASE 8e)
+-- ==========================================
+create table public.letter_comments (
+  id uuid default gen_random_uuid() primary key,
+  letter_id uuid references public.letters(id) on delete cascade not null,
+  profile_id uuid references public.profiles(id) on delete cascade not null,
+  content text not null,
+  created_at timestamptz default now() not null
+);
+
+-- Enable RLS
+alter table public.letter_comments enable row level security;
+
+-- Policies for letter_comments
+create policy "Authenticated users can view letter comments"
+  on public.letter_comments for select
+  to authenticated
+  using (true);
+
+create policy "Authenticated users can create comments"
+  on public.letter_comments for insert
+  to authenticated
+  with check (auth.uid() = profile_id);
+
+create policy "Users can delete their own comments or admins can delete any"
+  on public.letter_comments for delete
+  to authenticated
+  using (
+    auth.uid() = profile_id 
+    or public.current_user_role() = 'admin'
+  );
+
+
 
