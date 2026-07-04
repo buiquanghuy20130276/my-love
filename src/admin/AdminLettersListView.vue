@@ -40,6 +40,22 @@ async function deleteLetter(id: string, title: string) {
   if (!confirmDelete) return
 
   try {
+    // 1. Fetch letter details to check cover image URL
+    const { data: letterData } = await supabase
+      .from('letters')
+      .select('cover_image_url')
+      .eq('id', id)
+      .single()
+
+    if (letterData && letterData.cover_image_url) {
+      const urlParts = letterData.cover_image_url.split('/letter-images/')
+      if (urlParts.length >= 2) {
+        const filePath = urlParts[1]
+        await supabase.storage.from('letter-images').remove([filePath])
+      }
+    }
+
+    // 2. Delete database row
     const { error } = await supabase
       .from('letters')
       .delete()

@@ -40,6 +40,24 @@ async function deleteEvent(id: string, title: string) {
   if (!confirmDelete) return
 
   try {
+    // 1. Fetch linked images to delete from Storage first
+    const { data: eventImages } = await supabase
+      .from('timeline_images')
+      .select('image_url')
+      .eq('timeline_event_id', id)
+
+    if (eventImages && eventImages.length > 0) {
+      const paths = eventImages.map(img => {
+        const parts = img.image_url.split('/timeline-images/')
+        return parts.length >= 2 ? parts[1] : null
+      }).filter(Boolean) as string[]
+
+      if (paths.length > 0) {
+        await supabase.storage.from('timeline-images').remove(paths)
+      }
+    }
+
+    // 2. Delete database row (which cascade deletes the timeline_images table rows)
     const { error } = await supabase
       .from('timeline_events')
       .delete()
