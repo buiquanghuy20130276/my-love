@@ -65,6 +65,18 @@ const mySelection = ref<number[]>([]) // for choice quiz answering
 const mySingleSelection = ref<number | null>(null)
 const myEssayAnswer = ref('') // for essay quiz answering
 const submittingAnswer = ref(false)
+const isEditingAnswer = ref(false)
+const deletingAnswerId = ref<string | null>(null)
+const deletingCommentId = ref<string | null>(null)
+
+function isAnswerEditable(questionId: string) {
+  const ans = myAnswers.value[questionId]
+  if (!ans) return false
+  const created = dayjs(ans.created_at)
+  const now = dayjs()
+  const diffMinutes = now.diff(created, 'minute')
+  return diffMinutes < 5
+}
 
 // Essay comments state
 const activeComments = ref<QuizComment[]>([])
@@ -165,11 +177,14 @@ async function createQuizQuestion() {
 // Fetch all answers & comments for selected question details
 async function openQuestionDetail(q: QuizQuestion) {
   activeQuestion.value = q
+  isEditingAnswer.value = false
   mySelection.value = []
   mySingleSelection.value = null
   myEssayAnswer.value = ''
   activeAnswers.value = []
   activeComments.value = []
+  deletingAnswerId.value = null
+  deletingCommentId.value = null
 
   // Pre-fill answer if already answered
   const myAns = myAnswers.value[q.id]
@@ -275,6 +290,7 @@ async function submitAnswer() {
     
     // Update local answers lists
     myAnswers.value[activeQuestion.value.id] = data
+    isEditingAnswer.value = false
     openQuestionDetail(activeQuestion.value) // reload detailed info
     loadQuizData() // reload questions state
   } catch (err: any) {
@@ -316,22 +332,54 @@ async function sendQuizComment() {
   }
 }
 
-// Delete Comment for Essay
-async function deleteQuizComment(commentId: string) {
-  const confirmDelete = confirm('Bạn có muốn xóa bình luận này không?')
-  if (!confirmDelete) return
-
+// Delete Comment for Essay (Inline Confirm)
+async function confirmDeleteComment(commentId: string) {
   try {
-    const { error } = await supabase
+    console.log('Sending delete request to Supabase for comment:', commentId)
+    const { data, error, status } = await supabase
       .from('quiz_comments')
       .delete()
       .eq('id', commentId)
+      .select()
 
+    console.log('Supabase delete comment response status:', status, 'data:', data, 'error:', error)
     if (error) throw error
     activeComments.value = activeComments.value.filter(c => c.id !== commentId)
+    deletingCommentId.value = null
     toast.success('Đã xóa bình luận!')
   } catch (err: any) {
+    console.error('confirmDeleteComment catch block error:', err)
     toast.error('Lỗi khi xóa bình luận: ' + err.message)
+  }
+}
+
+// Delete Answer (Inline Confirm)
+async function confirmDeleteAnswer(answerId: string) {
+  try {
+    console.log('Sending delete request to Supabase for ID:', answerId)
+    const { data, error, status } = await supabase
+      .from('quiz_answers')
+      .delete()
+      .eq('id', answerId)
+      .select()
+
+    console.log('Supabase delete response status:', status, 'data:', data, 'error:', error)
+    if (error) throw error
+    
+    if (activeQuestion.value) {
+      console.log('Updating local active answers...')
+      delete myAnswers.value[activeQuestion.value.id]
+      activeAnswers.value = activeAnswers.value.filter(a => a.id !== answerId)
+    }
+    isEditingAnswer.value = false
+    deletingAnswerId.value = null
+    toast.success('Đã xóa câu trả lời thành công!')
+    console.log('Calling loadQuizData()...')
+    await loadQuizData()
+    console.log('loadQuizData finished!')
+  } catch (err: any) {
+    console.error('confirmDeleteAnswer catch block error:', err)
+    toast.error('Lỗi khi xóa câu trả lời: ' + err.message)
   }
 }
 
@@ -449,7 +497,7 @@ onMounted(() => {
         class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
         @click.self="showAddModal = false"
       >
-        <div class="w-full max-w-[360px] bg-surface-2 dark:bg-[#1C1A1D] border border-border rounded-3xl p-5 shadow-2xl space-y-4">
+        <div class="w-full max-w-[360px] bg-[#FDFBF7] dark:bg-[#1F1C18] border border-cream-200 dark:border-cream-950/40 rounded-3xl p-5 shadow-2xl space-y-4 text-[#4B2F15] dark:text-[#E2CBB2]">
           <header class="flex justify-between items-center border-b border-border pb-2.5">
             <h3 class="text-xs font-bold uppercase tracking-wider text-gray-900 dark:text-gray-100">Tạo câu đố mới</h3>
             <button @click="showAddModal = false" class="text-text-muted hover:text-gray-900 dark:hover:text-gray-100 text-xs">
@@ -465,7 +513,7 @@ onMounted(() => {
                 v-model="newQuestionText"
                 rows="3"
                 placeholder="Ví dụ: Lần đầu tiên tụi mình đi xem phim là phim gì?..."
-                class="w-full text-xs p-2.5"
+                class="w-full text-xs p-2.5 bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent rounded-xl text-[#4B2F15] dark:text-[#E2CBB2] focus:outline-none resize-none font-sans leading-snug"
                 required
               ></textarea>
             </div>
@@ -473,10 +521,10 @@ onMounted(() => {
             <!-- Quiz Type -->
             <div>
               <label class="text-[10px] text-text-secondary block mb-1">Loại câu đố</label>
-              <select v-model="newQuizType" class="w-full text-xs">
-                <option value="single">Trắc nghiệm (Chọn 1 đáp án)</option>
-                <option value="multiple">Chọn nhiều (Chọn nhiều đáp án)</option>
-                <option value="essay">Tự luận (Hỏi đáp, phản hồi tự do)</option>
+              <select v-model="newQuizType" class="w-full text-xs bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent rounded-xl text-[#4B2F15] dark:text-[#E2CBB2] focus:outline-none py-2 px-3">
+                <option value="single" class="bg-[#FDFBF7] dark:bg-[#1F1C18]">Trắc nghiệm (Chọn 1 đáp án)</option>
+                <option value="multiple" class="bg-[#FDFBF7] dark:bg-[#1F1C18]">Chọn nhiều (Chọn nhiều đáp án)</option>
+                <option value="essay" class="bg-[#FDFBF7] dark:bg-[#1F1C18]">Tự luận (Hỏi đáp, phản hồi tự do)</option>
               </select>
             </div>
 
@@ -494,7 +542,7 @@ onMounted(() => {
                   v-model="newOptions[idx]"
                   type="text"
                   placeholder="Nhập câu trả lời..."
-                  class="flex-1 text-xs py-1.5"
+                  class="flex-1 text-xs py-1.5 bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent rounded-xl text-[#4B2F15] dark:text-[#E2CBB2] focus:outline-none"
                   required
                 />
                 <button 
@@ -547,7 +595,7 @@ onMounted(() => {
         class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
         @click.self="activeQuestion = null"
       >
-        <div class="w-full max-w-[360px] bg-surface-2 dark:bg-[#1C1A1D] border border-border rounded-3xl p-5 shadow-2xl max-h-[85vh] flex flex-col justify-between overflow-y-auto">
+        <div class="w-full max-w-[360px] bg-[#FDFBF7] dark:bg-[#1F1C18] border border-cream-200 dark:border-cream-950/40 rounded-3xl p-5 shadow-2xl max-h-[85vh] flex flex-col justify-between overflow-y-auto text-[#4B2F15] dark:text-[#E2CBB2]">
           
           <!-- Top -->
           <div class="flex-1">
@@ -570,9 +618,11 @@ onMounted(() => {
               </h2>
             </div>
 
-            <!-- CASE 1: NOT ANSWERED YET -->
-            <div v-if="!myAnswers[activeQuestion.id]" class="space-y-4 border-t border-border/40 pt-4">
-              <h4 class="text-[11px] font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider select-none">Câu trả lời của bạn</h4>
+            <!-- CASE 1: NOT ANSWERED YET OR EDITING ANSWER -->
+            <div v-if="!myAnswers[activeQuestion.id] || isEditingAnswer" class="space-y-4 border-t border-border/40 pt-4">
+              <h4 class="text-[11px] font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider select-none">
+                {{ isEditingAnswer ? 'Chỉnh sửa câu trả lời của bạn' : 'Câu trả lời của bạn' }}
+              </h4>
               
               <!-- Essay answer form -->
               <div v-if="activeQuestion.quiz_type === 'essay'" class="space-y-3">
@@ -580,7 +630,7 @@ onMounted(() => {
                   v-model="myEssayAnswer"
                   rows="3"
                   placeholder="Nhập câu trả lời chi tiết của bạn vào đây..."
-                  class="w-full text-xs p-2 bg-surface-1 rounded-xl focus:outline-none"
+                  class="w-full text-xs p-2.5 bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent rounded-xl text-[#4B2F15] dark:text-[#E2CBB2] focus:outline-none resize-none font-sans leading-snug"
                   required
                 ></textarea>
               </div>
@@ -590,7 +640,7 @@ onMounted(() => {
                 <label 
                   v-for="(opt, idx) in activeQuestion.options" 
                   :key="idx"
-                  class="flex items-center gap-3 border border-border p-2.5 rounded-xl bg-surface-1 hover:bg-[#FBEAF0]/20 cursor-pointer transition select-none"
+                  class="flex items-center gap-3 border border-[#EBE6DC] dark:border-transparent p-2.5 rounded-xl bg-[#F6F2E9] dark:bg-[#282420] hover:bg-[#FBEAF0]/20 cursor-pointer transition select-none"
                   :class="mySingleSelection === idx ? 'border-[#D4537E] bg-[#FBEAF0]/10' : ''"
                 >
                   <input 
@@ -600,7 +650,7 @@ onMounted(() => {
                     class="w-4 h-4 accent-[#D4537E]"
                   />
                   <span class="text-xs text-gray-800 dark:text-gray-200">
-                    <span class="font-bold text-text-muted mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}
+                    <span class="font-bold text-text-secondary mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}
                   </span>
                 </label>
               </div>
@@ -611,7 +661,7 @@ onMounted(() => {
                   v-for="(opt, idx) in activeQuestion.options" 
                   :key="idx"
                   @click.prevent="toggleMultipleOption(idx)"
-                  class="flex items-center gap-3 border border-border p-2.5 rounded-xl bg-surface-1 hover:bg-[#FBEAF0]/20 cursor-pointer transition select-none"
+                  class="flex items-center gap-3 border border-[#EBE6DC] dark:border-transparent p-2.5 rounded-xl bg-[#F6F2E9] dark:bg-[#282420] hover:bg-[#FBEAF0]/20 cursor-pointer transition select-none"
                   :class="mySelection.includes(idx) ? 'border-[#D4537E] bg-[#FBEAF0]/10' : ''"
                 >
                   <input 
@@ -620,23 +670,34 @@ onMounted(() => {
                     class="w-4 h-4 accent-[#D4537E] pointer-events-none"
                   />
                   <span class="text-xs text-gray-800 dark:text-gray-200">
-                    <span class="font-bold text-text-muted mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}
+                    <span class="font-bold text-text-secondary mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}
                   </span>
                 </label>
               </div>
 
-              <!-- Submit Answer Button -->
-              <button 
-                @click="submitAnswer"
-                class="w-full bg-[#D4537E] hover:bg-[#c2436d] text-white text-xs font-semibold py-2.5 rounded-xl shadow-lg cursor-pointer transition flex items-center justify-center gap-1.5 disabled:opacity-50"
-                :disabled="submittingAnswer"
-              >
-                <i v-if="submittingAnswer" class="ti ti-loader animate-spin text-xs"></i>
-                <span>Gửi câu trả lời &rarr;</span>
-              </button>
+              <!-- Action Buttons -->
+              <div class="flex gap-2">
+                <button 
+                  v-if="isEditingAnswer"
+                  type="button"
+                  @click="isEditingAnswer = false"
+                  class="flex-1 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs font-semibold py-2.5 rounded-xl border border-border cursor-pointer transition"
+                >
+                  Hủy
+                </button>
+                <button 
+                  @click="submitAnswer"
+                  class="bg-[#D4537E] hover:bg-[#c2436d] text-white text-xs font-semibold py-2.5 rounded-xl shadow-lg cursor-pointer transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  :class="isEditingAnswer ? 'flex-1' : 'w-full'"
+                  :disabled="submittingAnswer"
+                >
+                  <i v-if="submittingAnswer" class="ti ti-loader animate-spin text-xs"></i>
+                  <span>{{ isEditingAnswer ? 'Lưu thay đổi' : 'Gửi câu trả lời &rarr;' }}</span>
+                </button>
+              </div>
             </div>
 
-            <!-- CASE 2: ALREADY ANSWERED -->
+            <!-- CASE 2: ALREADY ANSWERED AND NOT EDITING -->
             <div v-else class="space-y-4 border-t border-border/40 pt-4">
               <!-- Render details of selected options -->
               <div v-if="activeQuestion.quiz_type !== 'essay'" class="space-y-2.5">
@@ -645,9 +706,9 @@ onMounted(() => {
                 <div 
                   v-for="(opt, idx) in activeQuestion.options" 
                   :key="idx"
-                  class="flex items-center justify-between border border-border p-2.5 rounded-xl bg-surface-1/50 text-xs"
+                  class="flex items-center justify-between border border-[#EBE6DC] dark:border-transparent p-2.5 rounded-xl bg-[#F6F2E9]/60 dark:bg-[#282420]/60 text-xs"
                 >
-                  <span><span class="font-bold text-text-muted mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}</span>
+                  <span><span class="font-bold text-text-secondary mr-1">{{ String.fromCharCode(65 + idx) }}.</span> {{ opt }}</span>
                 </div>
               </div>
 
@@ -658,18 +719,58 @@ onMounted(() => {
                 <div 
                   v-for="ans in activeAnswers" 
                   :key="ans.id"
-                  class="bg-surface-1 dark:bg-[#1D1A1F]/30 border border-border p-3 rounded-2xl space-y-1.5"
+                  class="bg-[#F6F2E9] dark:bg-[#282420] border border-[#EBE6DC] dark:border-transparent p-3 rounded-2xl space-y-1.5"
                 >
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold text-gray-900 dark:text-gray-100">
-                      {{ ans.profiles?.display_name }}
-                    </span>
-                    <span 
-                      class="text-[8px] px-1 rounded font-semibold select-none"
-                      :class="ans.profiles?.role === 'admin' ? 'bg-[#E3EFFD] text-[#1E40AF]' : 'bg-[#FDF2F8] text-[#9D174D]'"
-                    >
-                      {{ ans.profiles?.role === 'admin' ? 'Anh ❤️' : 'Em 🌸' }}
-                    </span>
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs font-bold text-gray-900 dark:text-gray-100">
+                        {{ ans.profiles?.display_name }}
+                      </span>
+                      <span 
+                        class="text-[8px] px-1 rounded font-semibold select-none"
+                        :class="ans.profiles?.role === 'admin' ? 'bg-[#E3EFFD] text-[#1E40AF]' : 'bg-[#FDF2F8] text-[#9D174D]'"
+                      >
+                        {{ ans.profiles?.role === 'admin' ? 'Anh ❤️' : 'Em 🌸' }}
+                      </span>
+                    </div>
+
+                    <!-- Owner Controls -->
+                    <div v-if="ans.profile_id === authStore.user?.id" class="flex items-center gap-2 select-none text-[10px]">
+                      <template v-if="deletingAnswerId === ans.id">
+                        <span class="text-text-secondary select-none">Xóa chứ?</span>
+                        <button 
+                          @click.stop="confirmDeleteAnswer(ans.id)"
+                          class="text-red-500 font-bold hover:underline cursor-pointer px-1"
+                        >
+                          Có
+                        </button>
+                        <button 
+                          @click.stop="deletingAnswerId = null"
+                          class="text-gray-500 font-bold hover:underline cursor-pointer px-1"
+                        >
+                          Không
+                        </button>
+                      </template>
+                      <template v-else>
+                        <button 
+                          v-if="isAnswerEditable(activeQuestion.id)"
+                          @click.stop="isEditingAnswer = true"
+                          class="text-[#D4537E] hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
+                          title="Sửa câu trả lời"
+                        >
+                          <i class="ti ti-edit"></i>
+                          <span>Sửa</span>
+                        </button>
+                        <button 
+                          @click.stop="deletingAnswerId = ans.id"
+                          class="text-red-500 hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-1"
+                          title="Xóa câu trả lời"
+                        >
+                          <i class="ti ti-trash"></i>
+                          <span>Xóa</span>
+                        </button>
+                      </template>
+                    </div>
                   </div>
 
                   <!-- Text response if essay -->
@@ -724,13 +825,36 @@ onMounted(() => {
                         </span>
                       </div>
                       
-                      <button 
-                        v-if="c.profile_id === authStore.user?.id || authStore.role === 'admin'"
-                        @click="deleteQuizComment(c.id)"
-                        class="text-red-500 hover:text-red-600 text-[10px] cursor-pointer"
+                      <!-- Custom Inline Delete for comments -->
+                      <div 
+                        v-if="c.profile_id === authStore.user?.id || authStore.role === 'admin' || authStore.user?.email === 'quanghuy@love.com'"
+                        class="flex items-center gap-1.5 select-none text-[10px]"
                       >
-                        <i class="ti ti-trash"></i>
-                      </button>
+                        <template v-if="deletingCommentId === c.id">
+                          <span class="text-text-secondary select-none">Xóa?</span>
+                          <button 
+                            @click.stop="confirmDeleteComment(c.id)"
+                            class="text-red-500 font-bold hover:underline cursor-pointer px-1"
+                          >
+                            Có
+                          </button>
+                          <button 
+                            @click.stop="deletingCommentId = null"
+                            class="text-gray-500 font-bold hover:underline cursor-pointer px-1"
+                          >
+                            Không
+                          </button>
+                        </template>
+                        <template v-else>
+                          <button 
+                            @click.stop="deletingCommentId = c.id"
+                            class="text-red-500 hover:text-red-600 cursor-pointer p-1"
+                            title="Xóa bình luận"
+                          >
+                            <i class="ti ti-trash text-[11px]"></i>
+                          </button>
+                        </template>
+                      </div>
                     </div>
                     <p class="text-gray-700 dark:text-gray-300 leading-normal whitespace-pre-wrap">
                       {{ c.content }}

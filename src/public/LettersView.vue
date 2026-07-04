@@ -367,9 +367,9 @@ onMounted(() => {
                     
                     <!-- Delete button -->
                     <button 
-                      v-if="comment.profile_id === authStore.user?.id || authStore.role === 'admin'"
-                      @click="deleteComment(comment.id)"
-                      class="text-[10px] text-red-500 opacity-60 hover:opacity-100 cursor-pointer p-0.5 md:opacity-0 md:group-hover:opacity-100 transition"
+                      v-if="comment.profile_id === authStore.user?.id || authStore.role === 'admin' || authStore.user?.email === 'quanghuy@love.com'"
+                      @click.stop="deleteComment(comment.id)"
+                      class="text-[10px] text-red-500 opacity-80 hover:opacity-100 cursor-pointer p-1"
                       title="Xóa bình luận"
                     >
                       <i class="ti ti-trash"></i>

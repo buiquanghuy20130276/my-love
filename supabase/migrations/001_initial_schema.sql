@@ -365,10 +365,11 @@ create policy "Users can delete their own comments or admins can delete any"
 -- ==========================================
 -- 6. QUIZ ALTERATIONS & ANSWERS/COMMENTS SETUP (PHASE 8f)
 -- ==========================================
--- Add quiz_type, created_by, and make constraints nullable for essay quizzes
+-- Add quiz_type, created_by, created_at, and make constraints nullable for essay quizzes
 alter table public.quiz_questions 
   add column if not exists created_by uuid references public.profiles(id) on delete cascade,
   add column if not exists quiz_type text not null default 'single' check (quiz_type in ('essay', 'single', 'multiple')),
+  add column if not exists created_at timestamptz default now() not null,
   alter column options drop not null,
   alter column correct_index drop not null;
 
@@ -409,6 +410,14 @@ create policy "Authenticated users can update quiz answers"
   to authenticated
   using (auth.uid() = profile_id);
 
+create policy "Authenticated users can delete their own quiz answers"
+  on public.quiz_answers for delete
+  to authenticated
+  using (
+    auth.uid() = profile_id 
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
 -- Create Quiz Comments table (for discussion under essay questions)
 create table if not exists public.quiz_comments (
   id uuid default gen_random_uuid() primary key,
@@ -439,6 +448,40 @@ create policy "Users can delete their own quiz comments or admins can delete any
     auth.uid() = profile_id 
     or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
   );
+
+-- ==========================================
+-- 7. TIMELINE COMMENTS SETUP (PHASE 8g)
+-- ==========================================
+create table if not exists public.timeline_comments (
+  id uuid default gen_random_uuid() primary key,
+  timeline_event_id uuid references public.timeline_events(id) on delete cascade not null,
+  profile_id uuid references public.profiles(id) on delete cascade not null,
+  content text not null,
+  created_at timestamptz default now() not null
+);
+
+-- Enable RLS
+alter table public.timeline_comments enable row level security;
+
+-- Policies for timeline_comments
+create policy "Authenticated users can view timeline comments"
+  on public.timeline_comments for select
+  to authenticated
+  using (true);
+
+create policy "Authenticated users can insert timeline comments"
+  on public.timeline_comments for insert
+  to authenticated
+  with check (auth.uid() = profile_id);
+
+create policy "Users can delete their own timeline comments or admins can delete any"
+  on public.timeline_comments for delete
+  to authenticated
+  using (
+    auth.uid() = profile_id 
+    or exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+  );
+
 
 
 
