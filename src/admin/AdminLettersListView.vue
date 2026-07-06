@@ -216,7 +216,7 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="flex justify-between items-center mb-6">
       <div>
-        <h2 class="text-lg font-bold font-serif">Thư xin lỗi</h2>
+        <h2 class="text-lg font-bold font-serif">Thư</h2>
         <p class="text-xs text-text-muted">Quản lý các bức thư gửi cho cô ấy</p>
       </div>
       <RouterLink 

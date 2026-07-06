@@ -74,14 +74,7 @@ const currentPath = computed(() => route.path)
             <span>Nguyện vọng đôi</span>
           </RouterLink>
 
-          <RouterLink 
-            to="/admin/challenges" 
-            class="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors whitespace-nowrap"
-            :class="currentPath === '/admin/challenges' ? 'bg-[#FBEAF0] dark:bg-rosewood-950/40 text-[#993556] dark:text-[#F4C0D1]' : 'hover:bg-black/5 dark:hover:bg-white/5 text-text-secondary'"
-          >
-            <i class="ti ti-swords text-base"></i>
-            <span>Thử thách đôi</span>
-          </RouterLink>
+
 
           <RouterLink 
             to="/admin/settings" 

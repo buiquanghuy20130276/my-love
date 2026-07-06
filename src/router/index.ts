@@ -21,7 +21,7 @@ import AdminMapListView from '../admin/AdminMapListView.vue'
 import AdminMapEditView from '../admin/AdminMapEditView.vue'
 import AdminGalleryView from '../admin/AdminGalleryView.vue'
 import AdminBucketView from '../admin/AdminBucketView.vue'
-import AdminChallengesView from '../admin/AdminChallengesView.vue'
+import FeedView from '../public/FeedView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -67,6 +67,12 @@ const router = createRouter({
       path: '/quiz',
       name: 'quiz',
       component: QuizView,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/feed',
+      name: 'feed',
+      component: FeedView,
       meta: { requiresAuth: true }
     },
     // Admin routes wrapped in AdminLayout
@@ -134,11 +140,6 @@ const router = createRouter({
           path: 'bucket',
           name: 'admin-bucket',
           component: AdminBucketView
-        },
-        {
-          path: 'challenges',
-          name: 'admin-challenges',
-          component: AdminChallengesView
         }
       ]
     },

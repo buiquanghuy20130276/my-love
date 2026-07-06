@@ -67,7 +67,7 @@ const loadMoreTrigger = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
 // Tab states
-const activeTab = ref<'timeline' | 'bucket' | 'challenges'>('timeline')
+const activeTab = ref<'timeline' | 'bucket'>('timeline')
 
 // Mood states
 const partnerAMood = ref<{ mood_emoji: string; mood_note: string } | null>(null)
@@ -95,20 +95,6 @@ interface BucketItem {
 }
 const bucketList = ref<BucketItem[]>([])
 const loadingBucket = ref(false)
-
-// Love Challenges states
-interface LoveChallenge {
-  id: string
-  title: string
-  description: string
-  partner_a_completed: boolean
-  partner_b_completed: boolean
-  reward_text: string | null
-  reward_image_url: string | null
-  created_at: string
-}
-const loveChallenges = ref<LoveChallenge[]>([])
-const loadingChallenges = ref(false)
 
 // Fetch mood check-ins for today
 async function fetchMoods() {
@@ -159,6 +145,8 @@ async function checkInMood() {
         mood_emoji: selectedEmoji.value,
         mood_note: moodNote.value.trim() || null,
         check_in_date: todayStr
+      }, {
+        onConflict: 'profile_id,check_in_date'
       })
     
     if (error) throw error
@@ -235,56 +223,7 @@ async function toggleBucketStatus(item: BucketItem) {
   }
 }
 
-// Fetch love challenges
-async function fetchChallenges() {
-  loadingChallenges.value = true
-  try {
-    const { data, error } = await supabase
-      .from('love_challenges')
-      .select('*')
-      .order('created_at', { ascending: false })
-    
-    if (error) throw error
-    loveChallenges.value = data || []
-  } catch (err: any) {
-    console.error('Error fetching challenges:', err)
-  } finally {
-    loadingChallenges.value = false
-  }
-}
 
-async function toggleChallengeStatus(challenge: LoveChallenge) {
-  const isPartnerA = authStore.role === 'partner'
-  const updates: any = {}
-  if (isPartnerA) {
-    updates.partner_a_completed = !challenge.partner_a_completed
-  } else {
-    updates.partner_b_completed = !challenge.partner_b_completed
-  }
-  
-  try {
-    const { error } = await supabase
-      .from('love_challenges')
-      .update(updates)
-      .eq('id', challenge.id)
-    
-    if (error) throw error
-    
-    if (isPartnerA) {
-      challenge.partner_a_completed = !challenge.partner_a_completed
-    } else {
-      challenge.partner_b_completed = !challenge.partner_b_completed
-    }
-    
-    if (challenge.partner_a_completed && challenge.partner_b_completed) {
-      toast.success('Mở khóa thành công! Cả hai bạn đều đã hoàn thành thử thách! 🎁')
-    } else {
-      toast.success('Đã cập nhật tiến trình thử thách của bạn!')
-    }
-  } catch (err: any) {
-    toast.error('Lỗi khi cập nhật thử thách: ' + err.message)
-  }
-}
 
 // Fetch settings and first page of timeline events
 async function loadLandingData() {
@@ -391,7 +330,6 @@ onMounted(() => {
   fetchMoods()
   fetchQuotes()
   fetchBucketList()
-  fetchChallenges()
 
   // Setup observer for scroll loading
   observer = new IntersectionObserver((entries) => {
@@ -610,15 +548,7 @@ onUnmounted(() => {
             >
               📌 Nguyện vọng
             </button>
-            <button 
-              @click="activeTab = 'challenges'"
-              class="flex-1 pb-2.5 text-xs font-semibold border-b-2 text-center transition cursor-pointer"
-              :class="activeTab === 'challenges' 
-                ? 'border-[#D4537E] text-[#D4537E]' 
-                : 'border-transparent text-text-secondary hover:text-gray-900 dark:hover:text-gray-100'"
-            >
-              ⚔️ Thử thách đôi
-            </button>
+
           </div>
 
           <!-- Tab Content: Timeline -->
@@ -767,113 +697,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Tab Content: Challenges -->
-          <div v-else-if="activeTab === 'challenges'" class="space-y-4">
-            <div v-if="loadingChallenges" class="flex flex-col items-center justify-center py-12 gap-2">
-              <i class="ti ti-loader animate-spin text-xl text-[#D4537E]"></i>
-              <p class="text-[10px] text-text-muted">Đang tải thử thách...</p>
-            </div>
-            
-            <div v-else-if="loveChallenges.length === 0" class="text-center py-10 bg-surface-1 dark:bg-[#1D1A1F]/20 rounded-2xl border border-border">
-              <i class="ti ti-swords text-2xl text-text-muted mb-2"></i>
-              <p class="text-xs text-text-muted">Chưa có thử thách tuần nào.</p>
-              <p class="text-[10px] text-text-secondary mt-1">Hãy truy cập Admin để tạo nhé!</p>
-            </div>
-            
-            <div v-else class="space-y-4">
-              <div 
-                v-for="challenge in loveChallenges" 
-                :key="challenge.id"
-                class="border border-border rounded-xl p-4 bg-surface-2 dark:bg-[#1D1A1F]/30 flex flex-col gap-3 transition hover:shadow-sm"
-              >
-                <div>
-                  <h4 class="text-xs font-bold text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
-                    <i class="ti ti-swords text-[#D4537E]"></i>
-                    <span>{{ challenge.title }}</span>
-                  </h4>
-                  <p class="text-[10px] text-text-secondary mt-1 leading-relaxed">
-                    {{ challenge.description }}
-                  </p>
-                </div>
-                
-                <!-- Completion trackers -->
-                <div class="grid grid-cols-2 gap-3 py-1 border-t border-b border-border-strong/10">
-                  <!-- Partner A Completion -->
-                  <div class="flex items-center gap-2">
-                    <button 
-                      @click="authStore.role === 'partner' ? toggleChallengeStatus(challenge) : null"
-                      :disabled="authStore.role !== 'partner'"
-                      class="w-5 h-5 rounded border flex items-center justify-center transition flex-shrink-0"
-                      :class="[
-                        challenge.partner_a_completed 
-                          ? 'bg-romantic-100 border-romantic-300 text-[#993556] dark:bg-rosewood-950/30 dark:text-[#F4C0D1]' 
-                          : 'border-border-strong dark:border-white/10',
-                        authStore.role === 'partner' ? 'cursor-pointer hover:border-[#D4537E]' : 'cursor-default opacity-85'
-                      ]"
-                    >
-                      <i v-if="challenge.partner_a_completed" class="ti ti-check text-xs"></i>
-                    </button>
-                    <span class="text-[9px] font-semibold text-text-secondary truncate">
-                      {{ settings?.partner_a_name || 'Diệu Thiện' }}: 
-                      <span :class="challenge.partner_a_completed ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-text-muted font-normal'">
-                        {{ challenge.partner_a_completed ? 'Hoàn thành' : 'Chưa xong' }}
-                      </span>
-                    </span>
-                  </div>
 
-                  <!-- Partner B Completion -->
-                  <div class="flex items-center gap-2">
-                    <button 
-                      @click="authStore.role === 'admin' ? toggleChallengeStatus(challenge) : null"
-                      :disabled="authStore.role !== 'admin'"
-                      class="w-5 h-5 rounded border flex items-center justify-center transition flex-shrink-0"
-                      :class="[
-                        challenge.partner_b_completed 
-                          ? 'bg-[#E3EFFD] border-blue-300 text-blue-600 dark:bg-blue-950/20 dark:text-blue-400' 
-                          : 'border-border-strong dark:border-white/10',
-                        authStore.role === 'admin' ? 'cursor-pointer hover:border-blue-400' : 'cursor-default opacity-85'
-                      ]"
-                    >
-                      <i v-if="challenge.partner_b_completed" class="ti ti-check text-xs"></i>
-                    </button>
-                    <span class="text-[9px] font-semibold text-text-secondary truncate">
-                      {{ settings?.partner_b_name || 'Quang Huy' }}: 
-                      <span :class="challenge.partner_b_completed ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-text-muted font-normal'">
-                        {{ challenge.partner_b_completed ? 'Hoàn thành' : 'Chưa xong' }}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-                
-                <!-- Surprise Reward Section (locked unless both completed) -->
-                <div class="p-3.5 bg-surface-1 dark:bg-[#1D1A1F]/50 border border-dashed rounded-xl flex items-center justify-center text-center relative overflow-hidden">
-                  <!-- Locked overlay -->
-                  <div 
-                    v-if="!challenge.partner_a_completed || !challenge.partner_b_completed"
-                    class="absolute inset-0 bg-[#FDFBF7]/95 dark:bg-[#1F1C18]/95 backdrop-blur-[0.5px] flex items-center justify-center gap-1.5 text-[10px] font-bold text-text-secondary select-none"
-                  >
-                    <i class="ti ti-lock text-xs text-[#D4537E]"></i>
-                    <span>Cần cả hai hoàn thành để xem quà tặng</span>
-                  </div>
-                  
-                  <!-- Unlocked Reward contents -->
-                  <div class="space-y-1.5">
-                    <span class="text-lg">🎁</span>
-                    <p class="text-[11px] font-serif font-bold text-[#993556] dark:text-[#F4C0D1] uppercase tracking-wide">
-                      Phần thưởng bất ngờ đã được mở khóa!
-                    </p>
-                    <p class="text-[10px] text-gray-800 dark:text-gray-200 italic leading-relaxed">
-                      {{ challenge.reward_text || 'Món quà bất ngờ từ đối phương.' }}
-                    </p>
-                    <!-- Reward Image (if exists) -->
-                    <div v-if="challenge.reward_image_url" class="mt-2 rounded-lg overflow-hidden max-h-32 border border-border">
-                      <img :src="challenge.reward_image_url" class="w-full h-full object-cover" alt="Món quà kỷ niệm" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
         </section>
 
       </div>
