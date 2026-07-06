@@ -5,6 +5,7 @@ import { useThemeStore } from './stores/theme'
 import { Toaster } from 'vue-sonner'
 import { useRoute } from 'vue-router'
 import FloatingHearts from './components/FloatingHearts.vue'
+import MusicPlayer from './components/MusicPlayer.vue'
 
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
@@ -24,6 +25,9 @@ onMounted(async () => {
   
   <!-- Floating Hearts Background (disabled in admin panels) -->
   <FloatingHearts v-if="!route.path.includes('/admin')" />
+  
+  <!-- Global Music Player -->
+  <MusicPlayer v-if="!route.path.includes('/admin') && authStore.user" />
   
   <!-- Router View Transition container -->
   <main class="min-h-screen">

@@ -13,9 +13,12 @@ const partnerBAvatarUrl = ref('')
 const coverImageUrl = ref('')
 const nextSpecialDate = ref('')
 const nextSpecialLabel = ref('')
+const musicUrl = ref('')
+const musicTitle = ref('')
 
 const loading = ref(true)
 const saving = ref(false)
+const uploadingMusic = ref(false)
 
 // Fetch current settings
 async function fetchSettings() {
@@ -28,7 +31,6 @@ async function fetchSettings() {
       .single()
 
     if (error && error.code !== 'PGRST116') {
-      // PGRST116 is code for 0 rows returned, which is fine since we seed it or upsert
       throw error
     }
 
@@ -43,6 +45,8 @@ async function fetchSettings() {
       coverImageUrl.value = data.cover_image_url || ''
       nextSpecialDate.value = data.next_special_date || ''
       nextSpecialLabel.value = data.next_special_label || ''
+      musicUrl.value = data.music_url || ''
+      musicTitle.value = data.music_title || 'Bài hát kỷ niệm'
     }
   } catch (err: any) {
     toast.error('Lỗi khi tải cài đặt: ' + err.message)
@@ -86,6 +90,43 @@ async function uploadImage(event: Event, targetField: 'partnerA' | 'partnerB' | 
   }
 }
 
+// Upload audio/mp3 file to Supabase Storage
+async function uploadMusicFile(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+
+  if (file.size > 15 * 1024 * 1024) { // Limit to 15MB
+    toast.error('Kích thước tệp nhạc quá lớn! Vui lòng chọn tệp dưới 15MB.')
+    return
+  }
+
+  uploadingMusic.value = true
+  try {
+    toast.info('Đang tải tệp nhạc lên hệ thống lưu trữ...')
+    const fileName = `music-${Date.now()}.mp3`
+    const filePath = `music/${fileName}`
+
+    // Upload to letter-images storage bucket (which is public)
+    const { error: uploadError } = await supabase.storage
+      .from('letter-images')
+      .upload(filePath, file, { cacheControl: '3600', contentType: 'audio/mpeg', upsert: true })
+
+    if (uploadError) throw uploadError
+
+    const { data } = supabase.storage
+      .from('letter-images')
+      .getPublicUrl(filePath)
+
+    musicUrl.value = data.publicUrl
+    toast.success('Đã tải nhạc lên thành công! Hãy lưu cấu hình.')
+  } catch (err: any) {
+    toast.error('Lỗi khi tải nhạc lên: ' + err.message)
+  } finally {
+    uploadingMusic.value = false
+  }
+}
+
 // Save settings (Upsert row id: 1)
 async function saveSettings() {
   saving.value = true
@@ -103,7 +144,9 @@ async function saveSettings() {
         partner_b_avatar_url: partnerBAvatarUrl.value || null,
         cover_image_url: coverImageUrl.value || null,
         next_special_date: nextSpecialDate.value || null,
-        next_special_label: nextSpecialLabel.value || null
+        next_special_label: nextSpecialLabel.value || null,
+        music_url: musicUrl.value || null,
+        music_title: musicTitle.value || null
       })
 
     if (error) throw error
@@ -331,6 +374,51 @@ onMounted(() => {
                 placeholder="Hoặc URL ảnh bìa chính..."
                 class="w-full mt-2"
               />
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Music Background -->
+        <div>
+          <h3 class="text-xs font-bold text-[#993556] dark:text-[#F4C0D1] uppercase tracking-wider mb-4 border-b border-border pb-1.5 ml-1">
+            Cấu hình Nhạc nền ứng dụng
+          </h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="text-xs text-text-secondary block mb-1.5 ml-1">Tên bài hát hiển thị</label>
+              <input 
+                v-model="musicTitle"
+                type="text"
+                placeholder="Ví dụ: My Love - Westlife"
+                class="w-full"
+              />
+            </div>
+            <div>
+              <label class="text-xs text-text-secondary block mb-1.5 ml-1">Đường dẫn tệp âm thanh (URL MP3)</label>
+              <div class="flex items-center gap-3">
+                <input 
+                  type="file" 
+                  accept="audio/mpeg,audio/mp3" 
+                  id="music-file-upload" 
+                  class="hidden" 
+                  @change="uploadMusicFile"
+                  :disabled="uploadingMusic"
+                />
+                <label 
+                  for="music-file-upload"
+                  class="bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-[11px] font-semibold py-2 px-3.5 rounded-lg border border-border cursor-pointer transition flex-shrink-0"
+                  :class="uploadingMusic ? 'opacity-50 pointer-events-none' : ''"
+                >
+                  <i v-if="uploadingMusic" class="ti ti-loader animate-spin mr-1"></i>
+                  <span>Tải tệp .mp3 lên</span>
+                </label>
+                <input 
+                  v-model="musicUrl"
+                  type="text"
+                  placeholder="Nhập link tệp .mp3 hoặc tải lên..."
+                  class="flex-1"
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import Navbar from '../components/Navbar.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
@@ -16,26 +16,68 @@ interface MediaItem {
 
 const mediaItems = ref<MediaItem[]>([])
 const loading = ref(true)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const currentPage = ref(0)
+const pageSize = 12
 
 // Lightbox state
 const activeMedia = ref<MediaItem | null>(null)
 
-// Fetch all media
-async function loadGallery() {
-  loading.value = true
+// Intersection Observer for Infinite Scroll
+const loadMoreTrigger = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+
+// Fetch media with range-based pagination
+async function loadGallery(isInitial = true) {
+  if (isInitial) {
+    loading.value = true
+    currentPage.value = 0
+    mediaItems.value = []
+    hasMore.value = true
+  } else {
+    loadingMore.value = true
+  }
+
+  const from = currentPage.value * pageSize
+  const to = from + pageSize - 1
+
   try {
     const { data, error } = await supabase
       .from('gallery_media')
       .select('*')
       .order('created_at', { ascending: false })
+      .range(from, to)
 
     if (error) throw error
-    mediaItems.value = data || []
+
+    if (data) {
+      if (isInitial) {
+        mediaItems.value = data
+      } else {
+        mediaItems.value = [...mediaItems.value, ...data]
+      }
+      if (data.length < pageSize) {
+        hasMore.value = false
+      }
+    } else {
+      hasMore.value = false
+    }
   } catch (err: any) {
     toast.error('Lỗi khi tải bộ sưu tập: ' + err.message)
   } finally {
-    loading.value = false
+    if (isInitial) {
+      loading.value = false
+    } else {
+      loadingMore.value = false
+    }
   }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  currentPage.value++
+  await loadGallery(false)
 }
 
 // Download file helper (directly fetches file as blob)
@@ -59,6 +101,26 @@ function downloadFile(url: string, filename: string) {
 
 onMounted(() => {
   loadGallery()
+
+  // Setup observer
+  observer = new IntersectionObserver((entries) => {
+    const target = entries[0]
+    if (target.isIntersecting && hasMore.value && !loading.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, {
+    rootMargin: '150px' // Load when trigger is within 150px of the viewport
+  })
+
+  if (loadMoreTrigger.value) {
+    observer.observe(loadMoreTrigger.value)
+  }
+})
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+  }
 })
 </script>
 
@@ -91,7 +153,7 @@ onMounted(() => {
 
       <!-- Gallery Grid -->
       <div v-else class="flex-1 overflow-y-auto p-4">
-        <div class="grid grid-cols-2 gap-3 pb-8">
+        <div class="grid grid-cols-2 gap-3 pb-4">
           
           <div 
             v-for="item in mediaItems" 
@@ -137,6 +199,20 @@ onMounted(() => {
 
           </div>
 
+        </div>
+
+        <!-- Load More Trigger & Loading indicator -->
+        <div 
+          ref="loadMoreTrigger" 
+          class="py-6 flex justify-center items-center gap-2 select-none"
+        >
+          <template v-if="loadingMore">
+            <i class="ti ti-loader animate-spin text-lg text-[#D4537E]"></i>
+            <span class="text-xs text-text-muted">Đang tải thêm...</span>
+          </template>
+          <template v-else-if="!hasMore && mediaItems.length > 0">
+            <span class="text-[11px] text-text-muted italic">Đã xem hết kỷ niệm rồi ❤️</span>
+          </template>
         </div>
       </div>
 

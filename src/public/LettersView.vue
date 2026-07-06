@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { useAuthStore } from '../stores/auth'
 import Navbar from '../components/Navbar.vue'
@@ -22,7 +22,16 @@ const authStore = useAuthStore()
 
 const letters = ref<Letter[]>([])
 const loading = ref(true)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const currentPage = ref(0)
+const pageSize = 10
 const selectedTag = ref('Tất cả')
+const allTags = ref<string[]>(['Tất cả'])
+
+// Intersection Observer for scroll triggers
+const loadMoreTrigger = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
 
 // Custom Confirm Modal state
 const showConfirmModal = ref(false)
@@ -146,22 +155,89 @@ function deleteComment(commentId: string) {
   )
 }
 
-// Fetch letters from the secure view
-async function loadLetters() {
-  loading.value = true
+// Fetch lightweight tags lists
+async function fetchAllTags() {
   try {
     const { data, error } = await supabase
       .from('secure_letters')
+      .select('tag')
+    
+    if (error) throw error
+    
+    const set = new Set<string>()
+    if (data) {
+      data.forEach((item: any) => {
+        if (item.tag) set.add(item.tag)
+      })
+    }
+    allTags.value = ['Tất cả', ...Array.from(set)]
+  } catch (err: any) {
+    console.error('Error fetching tags:', err.message)
+  }
+}
+
+// Fetch letters from the secure view with range-based pagination
+async function loadLetters(isInitial = true) {
+  if (isInitial) {
+    loading.value = true
+    currentPage.value = 0
+    letters.value = []
+    hasMore.value = true
+  } else {
+    loadingMore.value = true
+  }
+
+  const from = currentPage.value * pageSize
+  const to = from + pageSize - 1
+
+  try {
+    let query = supabase
+      .from('secure_letters')
       .select('*')
       .order('created_at', { ascending: false })
+      .range(from, to)
+
+    if (selectedTag.value !== 'Tất cả') {
+      query = query.eq('tag', selectedTag.value)
+    }
+
+    const { data, error } = await query
 
     if (error) throw error
-    letters.value = data || []
+
+    if (data) {
+      if (isInitial) {
+        letters.value = data
+      } else {
+        letters.value = [...letters.value, ...data]
+      }
+      if (data.length < pageSize) {
+        hasMore.value = false
+      }
+    } else {
+      hasMore.value = false
+    }
   } catch (err: any) {
     toast.error('Lỗi khi tải thư: ' + err.message)
   } finally {
-    loading.value = false
+    if (isInitial) {
+      loading.value = false
+    } else {
+      loadingMore.value = false
+    }
   }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  currentPage.value++
+  await loadLetters(false)
+}
+
+function selectTag(tag: string) {
+  if (selectedTag.value === tag) return
+  selectedTag.value = tag
+  loadLetters(true)
 }
 
 // Check if a letter is locked
@@ -202,22 +278,34 @@ function closeLetter() {
 }
 
 // Extract unique tags for chip scrolling
-const tagsList = computed(() => {
-  const list = new Set<string>()
-  letters.value.forEach(l => {
-    if (l.tag) list.add(l.tag)
-  })
-  return ['Tất cả', ...Array.from(list)]
-})
+const tagsList = computed(() => allTags.value)
 
 // Filtered letters based on tag chip selection
-const filteredLetters = computed(() => {
-  if (selectedTag.value === 'Tất cả') return letters.value
-  return letters.value.filter(l => l.tag === selectedTag.value)
-})
+const filteredLetters = computed(() => letters.value)
 
 onMounted(() => {
+  fetchAllTags()
   loadLetters()
+
+  // Setup observer
+  observer = new IntersectionObserver((entries) => {
+    const target = entries[0]
+    if (target.isIntersecting && hasMore.value && !loading.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, {
+    rootMargin: '100px'
+  })
+
+  if (loadMoreTrigger.value) {
+    observer.observe(loadMoreTrigger.value)
+  }
+})
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+  }
 })
 </script>
 
@@ -239,7 +327,7 @@ onMounted(() => {
         <button 
           v-for="t in tagsList" 
           :key="t"
-          @click="selectedTag = t"
+          @click="selectTag(t)"
           class="text-xs px-3.5 py-1.5 rounded-full whitespace-nowrap cursor-pointer transition border border-border"
           :class="selectedTag === t 
             ? 'bg-[#FBEAF0] dark:bg-rosewood-950/40 text-[#993556] dark:text-[#F4C0D1] border-romantic-200/10' 
@@ -299,6 +387,19 @@ onMounted(() => {
           <i v-if="!isLocked(letter)" class="ti ti-chevron-right text-sm text-text-muted"></i>
         </div>
 
+        <!-- Load More Trigger & Loading indicator -->
+        <div 
+          ref="loadMoreTrigger" 
+          class="py-6 flex justify-center items-center gap-2 select-none"
+        >
+          <template v-if="loadingMore">
+            <i class="ti ti-loader animate-spin text-lg text-[#D4537E]"></i>
+            <span class="text-xs text-text-muted">Đang tải thêm thư...</span>
+          </template>
+          <template v-else-if="!hasMore && letters.length > 0">
+            <span class="text-[11px] text-text-muted italic">Đã xem hết các lá thư rồi 🌹</span>
+          </template>
+        </div>
       </div>
 
     </div>

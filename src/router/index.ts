@@ -20,6 +20,8 @@ import AdminSettingsView from '../admin/AdminSettingsView.vue'
 import AdminMapListView from '../admin/AdminMapListView.vue'
 import AdminMapEditView from '../admin/AdminMapEditView.vue'
 import AdminGalleryView from '../admin/AdminGalleryView.vue'
+import AdminBucketView from '../admin/AdminBucketView.vue'
+import AdminChallengesView from '../admin/AdminChallengesView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -127,6 +129,16 @@ const router = createRouter({
           path: 'gallery',
           name: 'admin-gallery',
           component: AdminGalleryView
+        },
+        {
+          path: 'bucket',
+          name: 'admin-bucket',
+          component: AdminBucketView
+        },
+        {
+          path: 'challenges',
+          name: 'admin-challenges',
+          component: AdminChallengesView
         }
       ]
     },

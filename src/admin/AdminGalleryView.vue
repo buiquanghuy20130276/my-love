@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { toast } from 'vue-sonner'
 
@@ -16,27 +16,67 @@ const mediaItems = ref<MediaItem[]>([])
 const loading = ref(true)
 const uploading = ref(false)
 const progress = ref(0)
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const currentPage = ref(0)
+const pageSize = 12
+const loadMoreTrigger = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
 
 // Form fields
 const title = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
-// Fetch all media items
-async function fetchMediaItems() {
-  loading.value = true
+// Fetch media items with range-based pagination
+async function fetchMediaItems(isInitial = true) {
+  if (isInitial) {
+    loading.value = true
+    currentPage.value = 0
+    mediaItems.value = []
+    hasMore.value = true
+  } else {
+    loadingMore.value = true
+  }
+
+  const from = currentPage.value * pageSize
+  const to = from + pageSize - 1
+
   try {
     const { data, error } = await supabase
       .from('gallery_media')
       .select('*')
       .order('created_at', { ascending: false })
+      .range(from, to)
 
     if (error) throw error
-    mediaItems.value = data || []
+
+    if (data) {
+      if (isInitial) {
+        mediaItems.value = data
+      } else {
+        mediaItems.value = [...mediaItems.value, ...data]
+      }
+      if (data.length < pageSize) {
+        hasMore.value = false
+      }
+    } else {
+      hasMore.value = false
+    }
   } catch (err: any) {
     toast.error('Lỗi khi tải album ảnh: ' + err.message)
   } finally {
-    loading.value = false
+    if (isInitial) {
+      loading.value = false
+    } else {
+      loadingMore.value = false
+    }
   }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  currentPage.value++
+  await fetchMediaItems(false)
 }
 
 import { compressImage } from '../lib/imageCompressor'
@@ -268,6 +308,26 @@ async function saveEdit(item: MediaItem) {
 
 onMounted(() => {
   fetchMediaItems()
+
+  // Setup observer for scroll loading
+  observer = new IntersectionObserver((entries) => {
+    const target = entries[0]
+    if (target.isIntersecting && hasMore.value && !loading.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, {
+    rootMargin: '100px'
+  })
+
+  if (loadMoreTrigger.value) {
+    observer.observe(loadMoreTrigger.value)
+  }
+})
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+  }
 })
 </script>
 
@@ -431,6 +491,20 @@ onMounted(() => {
             </div>
           </div>
 
+        </div>
+
+        <!-- Load More Trigger & Loading indicator -->
+        <div 
+          ref="loadMoreTrigger" 
+          class="py-6 flex flex-col justify-center items-center gap-2 select-none"
+        >
+          <template v-if="loadingMore">
+            <i class="ti ti-loader animate-spin text-lg text-[#D4537E]"></i>
+            <span class="text-xs text-text-muted">Đang tải thêm hình ảnh/video...</span>
+          </template>
+          <template v-else-if="!hasMore && mediaItems.length > 0">
+            <span class="text-xs text-text-muted italic">Đã tải toàn bộ hình ảnh và video trong kho lưu trữ.</span>
+          </template>
         </div>
       </div>
     </div>

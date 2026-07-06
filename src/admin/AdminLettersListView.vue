@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { toast } from 'vue-sonner'
 
@@ -16,22 +16,117 @@ const letters = ref<Letter[]>([])
 const loading = ref(true)
 const selectedTagFilter = ref('Tất cả')
 
-// Fetch letters
-async function fetchLetters() {
-  loading.value = true
+// Pagination states
+const currentPage = ref(0)
+const pageSize = 10
+const filteredTotalCount = ref(0)
+const totalCount = ref(0)
+const publishedCount = ref(0)
+const draftCount = ref(0)
+const uniqueTags = ref<string[]>(['Tất cả'])
+const loadingMore = ref(false)
+const hasMore = ref(true)
+const loadMoreTrigger = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+
+
+// Fetch Stats (Totals, Published, Drafts)
+async function fetchStats() {
   try {
-    const { data, error } = await supabase
+    const { count: total } = await supabase
       .from('letters')
-      .select('id, title, tag, status, unlock_date, created_at')
+      .select('*', { count: 'exact', head: true })
+    totalCount.value = total || 0
+
+    const { count: published } = await supabase
+      .from('letters')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'published')
+    publishedCount.value = published || 0
+
+    const { count: draft } = await supabase
+      .from('letters')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'draft')
+    draftCount.value = draft || 0
+  } catch (err: any) {
+    console.error('Lỗi khi tải thống kê thư:', err)
+  }
+}
+
+// Fetch all unique tags for filter
+async function fetchUniqueTags() {
+  try {
+    const { data } = await supabase.from('letters').select('tag')
+    const tags = new Set<string>()
+    if (data) {
+      data.forEach(l => {
+        if (l.tag) tags.add(l.tag)
+      })
+    }
+    uniqueTags.value = ['Tất cả', ...Array.from(tags)]
+  } catch (err: any) {
+    console.error('Lỗi khi tải danh sách nhãn:', err)
+  }
+}
+
+// Fetch letters with range-based pagination
+async function fetchLetters(isInitial = true) {
+  if (isInitial) {
+    loading.value = true
+    currentPage.value = 0
+    letters.value = []
+    hasMore.value = true
+  } else {
+    loadingMore.value = true
+  }
+
+  const from = currentPage.value * pageSize
+  const to = from + pageSize - 1
+
+  try {
+    let query = supabase
+      .from('letters')
+      .select('id, title, tag, status, unlock_date, created_at', { count: 'exact' })
       .order('created_at', { ascending: false })
+      .range(from, to)
+
+    if (selectedTagFilter.value !== 'Tất cả') {
+      query = query.eq('tag', selectedTagFilter.value)
+    }
+
+    const { data, count, error } = await query
 
     if (error) throw error
-    letters.value = data || []
+
+    if (data) {
+      if (isInitial) {
+        letters.value = data
+      } else {
+        letters.value = [...letters.value, ...data]
+      }
+      if (data.length < pageSize) {
+        hasMore.value = false
+      }
+    } else {
+      hasMore.value = false
+    }
+    filteredTotalCount.value = count || 0
   } catch (err: any) {
     toast.error('Lỗi khi tải danh sách thư: ' + err.message)
   } finally {
-    loading.value = false
+    if (isInitial) {
+      loading.value = false
+    } else {
+      loadingMore.value = false
+    }
   }
+}
+
+async function loadMore() {
+  if (loadingMore.value || !hasMore.value) return
+  currentPage.value++
+  await fetchLetters(false)
 }
 
 // Delete letter
@@ -63,34 +158,56 @@ async function deleteLetter(id: string, title: string) {
 
     if (error) throw error
     toast.success('Đã xóa thư thành công!')
-    fetchLetters() // refresh
+    
+    // Refresh stats and unique tags
+    fetchStats()
+    fetchUniqueTags()
+    
+    // Adjust current page if needed
+    if (letters.value.length === 1 && currentPage.value > 0) {
+      currentPage.value--
+    }
+    fetchLetters()
   } catch (err: any) {
     toast.error('Lỗi khi xóa thư: ' + err.message)
   }
 }
 
 // Unique tags for filter dropdown
-const allTags = computed(() => {
-  const tags = new Set<string>()
-  letters.value.forEach(l => {
-    if (l.tag) tags.add(l.tag)
-  })
-  return ['Tất cả', ...Array.from(tags)]
-})
+const allTags = computed(() => uniqueTags.value)
 
-// Filtered letters
-const filteredLetters = computed(() => {
-  if (selectedTagFilter.value === 'Tất cả') return letters.value
-  return letters.value.filter(l => l.tag === selectedTagFilter.value)
-})
+// Filtered letters (already filtered on db level)
+const filteredLetters = computed(() => letters.value)
 
-// Stats counters
-const totalCount = computed(() => letters.value.length)
-const publishedCount = computed(() => letters.value.filter(l => l.status === 'published').length)
-const draftCount = computed(() => letters.value.filter(l => l.status === 'draft').length)
+// Reset page and reload on tag change
+watch(selectedTagFilter, () => {
+  fetchLetters()
+})
 
 onMounted(() => {
+  fetchStats()
+  fetchUniqueTags()
   fetchLetters()
+
+  // Setup observer for scroll loading
+  observer = new IntersectionObserver((entries) => {
+    const target = entries[0]
+    if (target.isIntersecting && hasMore.value && !loading.value && !loadingMore.value) {
+      loadMore()
+    }
+  }, {
+    rootMargin: '100px'
+  })
+
+  if (loadMoreTrigger.value) {
+    observer.observe(loadMoreTrigger.value)
+  }
+})
+
+onUnmounted(() => {
+  if (observer) {
+    observer.disconnect()
+  }
 })
 </script>
 
@@ -212,6 +329,20 @@ onMounted(() => {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- Load More Trigger & Loading indicator -->
+      <div 
+        ref="loadMoreTrigger" 
+        class="py-6 flex flex-col justify-center items-center gap-2 select-none border-t border-border mt-4"
+      >
+        <template v-if="loadingMore">
+          <i class="ti ti-loader animate-spin text-lg text-[#D4537E]"></i>
+          <span class="text-xs text-text-muted">Đang tải thêm thư...</span>
+        </template>
+        <template v-else-if="!hasMore && letters.length > 0">
+          <span class="text-[11px] text-text-muted italic">Đã tải toàn bộ thư trong danh sách (Tổng số {{ filteredTotalCount }} thư).</span>
+        </template>
       </div>
     </div>
   </div>
