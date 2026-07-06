@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { supabase } from '../lib/supabaseClient'
 import { useAuthStore } from '../stores/auth'
 import { toast } from 'vue-sonner'
@@ -85,11 +85,84 @@ interface UserProfile {
   avatar_url: string | null
 }
 
+interface ImageTransform {
+  scale: number
+  x: number // relative fraction (-1 to 1)
+  y: number // relative fraction (-1 to 1)
+}
+
 interface PreviewItem {
   url: string
   file?: File | null
   originalUrl: string
   originalFile?: File | null
+  transform?: ImageTransform
+}
+
+function parseImageWithTransform(url: string) {
+  if (!url) return { url: '', hasTransform: false, transform: { scale: 1, x: 0, y: 0 } }
+  const parts = url.split('#')
+  const baseUrl = parts[0]
+  const hash = parts[1]
+  const transform = { scale: 1, x: 0, y: 0 }
+  let hasTransform = false
+  if (hash) {
+    const params = new URLSearchParams(hash)
+    transform.scale = parseFloat(params.get('scale') || '1')
+    transform.x = parseFloat(params.get('x') || '0')
+    transform.y = parseFloat(params.get('y') || '0')
+    hasTransform = true
+  }
+  return { url: baseUrl, hasTransform, transform }
+}
+
+function getTransformStyle(transform?: ImageTransform) {
+  if (!transform) return {}
+  return {
+    transform: `translate(${transform.x * 100}%, ${transform.y * 100}%) scale(${transform.scale})`,
+    transformOrigin: 'center'
+  }
+}
+
+// img class helper: always absolute inset-0 so overflow:hidden on parent clips correctly
+function getGridImageProps(imgUrl: string) {
+  if (!imgUrl) return { src: '', class: '', style: {} }
+  const parsed = parseImageWithTransform(imgUrl)
+  return {
+    src: parsed.url,
+    class: parsed.hasTransform 
+      ? 'absolute inset-0 w-full h-full object-contain origin-center select-none pointer-events-none' 
+      : 'absolute inset-0 w-full h-full object-cover select-none pointer-events-none',
+    style: parsed.hasTransform ? getTransformStyle(parsed.transform) : {}
+  }
+}
+
+function getDetailImageProps(imgUrl: string) {
+  if (!imgUrl) return { src: '', class: '', style: {}, onClick: () => {} }
+  const parsed = parseImageWithTransform(imgUrl)
+  return {
+    src: parsed.url,
+    class: parsed.hasTransform 
+      ? 'absolute inset-0 w-full h-full object-contain origin-center select-none cursor-zoom-in' 
+      : 'absolute inset-0 w-full h-full object-cover select-none cursor-zoom-in',
+    style: parsed.hasTransform ? getTransformStyle(parsed.transform) : {},
+    onClick: (e: MouseEvent) => {
+      e.stopPropagation()
+      openLightbox(imgUrl)
+    }
+  }
+}
+
+function getComposerPreviewProps(item: PreviewItem) {
+  if (!item) return { src: '', class: '', style: {} }
+  const hasTransform = !!(item.transform && (item.transform.scale !== 1 || item.transform.x !== 0 || item.transform.y !== 0))
+  return {
+    src: item.originalUrl || item.url,
+    class: hasTransform 
+      ? 'absolute inset-0 w-full h-full object-contain origin-center cursor-pointer hover:opacity-90 transition' 
+      : 'absolute inset-0 w-full h-full object-cover cursor-pointer hover:opacity-90 transition',
+    style: hasTransform ? getTransformStyle(item.transform) : {}
+  }
 }
 
 // State variables
@@ -128,8 +201,6 @@ const selectedPreviewIndex = ref<number | null>(null)
 const zoom = ref(1)
 const posX = ref(0)
 const posY = ref(0)
-const viewportW = ref(280)
-const viewportH = ref(280)
 const targetAspect = ref(1)
 const cropW = ref(0)
 const cropH = ref(0)
@@ -238,21 +309,37 @@ function onCropImageLoad(e: Event) {
   cropLeft.value = (W_c - cw) / 2
   cropTop.value = (H_c - ch) / 2
   
-  // Fit image inside 256x256 container
-  scaleFit = Math.min(256 / imgNaturalWidth, 256 / imgNaturalHeight)
+  // Fit image inside the crop box aspect ratio (representing layout cell)
+  scaleFit = Math.min(cropW.value / imgNaturalWidth, cropH.value / imgNaturalHeight)
   
   fittedWidth.value = imgNaturalWidth * scaleFit
   fittedHeight.value = imgNaturalHeight * scaleFit
   
   imgLeft.value = (W_c - fittedWidth.value) / 2
   imgTop.value = (H_c - fittedHeight.value) / 2
-  
-  // Initialize zoom to the minimum zoom required to cover the crop box
+
   const minZoom = Math.max(cropW.value / fittedWidth.value, cropH.value / fittedHeight.value)
-  zoom.value = minZoom
-  posX.value = 0
-  posY.value = 0
   
+  // Restore saved transform only if it was truly user-adjusted (not the untouched default)
+  const idx = selectedPreviewIndex.value
+  const savedTransform = idx !== null ? previewItems.value[idx]?.transform : null
+  const hasUserTransform = savedTransform && (
+    savedTransform.scale !== 1 || savedTransform.x !== 0 || savedTransform.y !== 0
+  )
+  
+  if (hasUserTransform && savedTransform) {
+    zoom.value = savedTransform.scale
+    posX.value = savedTransform.x * fittedWidth.value
+    posY.value = savedTransform.y * fittedHeight.value
+  } else {
+    // Default: fit zoom to exactly cover the crop box, centered
+    zoom.value = minZoom
+    posX.value = 0
+    posY.value = 0
+  }
+  
+  // Always clamp zoom ≥ minZoom so the image always fills the crop frame
+  constrainZoom()
   constrainOffsets()
 }
 
@@ -326,86 +413,34 @@ function handleTouchMove(e: TouchEvent) {
 function startCropImage(idx: number) {
   selectedPreviewIndex.value = idx
   const item = previewItems.value[idx]
-  cropImageSrc.value = item.originalUrl
+  // Always strip hash transform fragment so we load the pure original image
+  const rawSrc = (item.originalUrl || item.url).split('#')[0]
+  cropImageSrc.value = rawSrc
   targetAspect.value = getTargetAspect(previewItems.value.length, layoutType.value, idx)
   
-  zoom.value = 1
+  // posX/posY will be restored in onCropImageLoad after the image loads & dimensions are known
   posX.value = 0
   posY.value = 0
+  zoom.value = 1
+  
   showCropModal.value = true
 }
 
-async function confirmCrop() {
+function confirmCrop() {
   if (selectedPreviewIndex.value === null) return
-  submittingPost.value = true
-  try {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.src = cropImageSrc.value
-    
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = reject
-    })
-    
-    const W_v = viewportW.value
-    const H_v = viewportH.value
-    const w_render = imgNaturalWidth * scaleFit * zoom.value
-    const h_render = imgNaturalHeight * scaleFit * zoom.value
-    
-    const left = (W_v - w_render) / 2 + posX.value
-    const top = (H_v - h_render) / 2 + posY.value
-    
-    const destW = 800
-    const destH = Math.round(800 / targetAspect.value)
-    
-    const factor = destW / W_v
-    
-    const canvas = document.createElement('canvas')
-    canvas.width = destW
-    canvas.height = destH
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Could not create canvas context')
-    
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, destW, destH)
-    ctx.drawImage(
-      img, 
-      left * factor, 
-      top * factor, 
-      w_render * factor, 
-      h_render * factor
-    )
-    
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        toast.error('Lỗi khi cắt ảnh')
-        submittingPost.value = false
-        return
-      }
-      
-      const file = new File([blob], `cropped-${Date.now()}.webp`, { type: 'image/webp' })
-      const newUrl = URL.createObjectURL(blob)
-      
-      const oldItem = previewItems.value[selectedPreviewIndex.value!]
-      if (oldItem.file) {
-        URL.revokeObjectURL(oldItem.url)
-      }
-      previewItems.value[selectedPreviewIndex.value!] = {
-        url: newUrl,
-        file: file,
-        originalUrl: oldItem.originalUrl,
-        originalFile: oldItem.originalFile
-      }
-      
-      showCropModal.value = false
-      toast.success('Đã chỉnh sửa và cắt ảnh!')
-      submittingPost.value = false
-    }, 'image/webp', 0.95)
-  } catch (err: any) {
-    toast.error('Lỗi khi cắt ảnh: ' + err.message)
-    submittingPost.value = false
+  
+  const idx = selectedPreviewIndex.value
+  const item = previewItems.value[idx]
+  
+  // Convert absolute pixel offsets to relative fractions of fitted image sizes
+  item.transform = {
+    scale: zoom.value,
+    x: fittedWidth.value > 0 ? posX.value / fittedWidth.value : 0,
+    y: fittedHeight.value > 0 ? posY.value / fittedHeight.value : 0
   }
+  
+  showCropModal.value = false
+  toast.success('Đã căn chỉnh vị trí ảnh!')
 }
 
 // Load all user profile configurations
@@ -444,7 +479,7 @@ async function fetchSettings() {
 
 // Lightbox handlers
 function openLightbox(url: string) {
-  activeLightboxUrl.value = url
+  activeLightboxUrl.value = url.split('#')[0]
   showLightbox.value = true
 }
 
@@ -601,12 +636,16 @@ function openEditPostComposer(post: FeedPost) {
   editingPostId.value = post.id
   postContent.value = post.content || ''
   layoutType.value = post.layout_type
-  previewItems.value = post.images.map(img => ({ 
-    url: img,
-    file: null,
-    originalUrl: img,
-    originalFile: null
-  }))
+  previewItems.value = post.images.map(img => {
+    const parsed = parseImageWithTransform(img)
+    return { 
+      url: parsed.url,
+      file: null,
+      originalUrl: parsed.url,
+      originalFile: null,
+      transform: parsed.transform
+    }
+  })
   showComposeModal.value = true
 }
 
@@ -625,9 +664,11 @@ function handleFileChange(e: Event) {
       url: objectUrl,
       file: f,
       originalUrl: objectUrl,
-      originalFile: f
+      originalFile: f,
+      transform: { scale: 1, x: 0, y: 0 }
     })
   })
+  target.value = ''
 }
 
 function removePreview(idx: number) {
@@ -651,29 +692,36 @@ async function publishPost() {
   try {
     const finalImages: string[] = []
     
-    // Separate existing images from new files
-    const existing = previewItems.value.filter(item => !item.file).map(item => item.url)
-    const filesToUpload = previewItems.value.filter(item => item.file).map(item => item.file) as File[]
-    
-    finalImages.push(...existing)
-
-    // Compression and upload
-    for (const file of filesToUpload) {
-      const compressed = await compressImage(file)
-      const fileName = `feed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.webp`
-      const filePath = `feed/${fileName}`
-      
-      const { error: uploadError } = await supabase.storage
-        .from('letter-images')
-        .upload(filePath, compressed, { cacheControl: '3600', contentType: 'image/webp' })
-      
-      if (uploadError) throw uploadError
-      
-      const { data } = supabase.storage
-        .from('letter-images')
-        .getPublicUrl(filePath)
+    // Process preview items in order
+    for (const item of previewItems.value) {
+      let publicUrl = ''
+      if (item.file) {
+        // Compress and upload original uncropped file
+        const compressed = await compressImage(item.file)
+        const fileName = `feed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.webp`
+        const filePath = `feed/${fileName}`
         
-      finalImages.push(data.publicUrl)
+        const { error: uploadError } = await supabase.storage
+          .from('letter-images')
+          .upload(filePath, compressed, { cacheControl: '3600', contentType: 'image/webp' })
+        
+        if (uploadError) throw uploadError
+        
+        const { data } = supabase.storage
+          .from('letter-images')
+          .getPublicUrl(filePath)
+          
+        publicUrl = data.publicUrl
+      } else {
+        // Reuse existing image url, splitting off any old hash
+        publicUrl = item.url.split('#')[0]
+      }
+      
+      // Append transform hash if present
+      const transformHash = item.transform 
+        ? `#scale=${item.transform.scale}&x=${item.transform.x}&y=${item.transform.y}` 
+        : ''
+      finalImages.push(publicUrl + transformHash)
     }
 
     if (isEditing.value && editingPostId.value) {
@@ -859,6 +907,12 @@ function openPostDetail(post: FeedPost) {
   showDetailModal.value = true
 }
 
+watch(layoutType, () => {
+  previewItems.value.forEach(item => {
+    item.transform = undefined
+  })
+})
+
 onMounted(() => {
   fetchProfiles()
   fetchSettings()
@@ -962,57 +1016,45 @@ onUnmounted(() => {
           <!-- Images custom layout -->
           <div v-if="post.images && post.images.length > 0" class="mt-2">
             <!-- 1 Image -->
-            <div v-if="post.images.length === 1" class="rounded-xl overflow-hidden max-h-60 border border-border">
-              <img :src="post.images[0]" class="w-full h-full object-cover" />
+            <div v-if="post.images.length === 1" class="relative rounded-xl overflow-hidden max-h-60 border border-border">
+              <img v-bind="getGridImageProps(post.images[0])" class="w-full h-full object-cover" />
             </div>
 
             <!-- 2 Images -->
             <div v-else-if="post.images.length === 2">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1.5 h-48 rounded-xl overflow-hidden border border-border">
-                <img :src="post.images[0]" class="w-full h-full object-cover" />
-                <img :src="post.images[1]" class="w-full h-full object-cover" />
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-48 rounded-xl overflow-hidden border border-border">
-                <div class="w-2/3 h-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
-                <div class="w-1/3 h-full">
-                  <img :src="post.images[1]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden w-1/3 h-full"><img v-bind="getGridImageProps(post.images[1])" /></div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="h-2/3 w-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
-                <div class="h-1/3 w-full">
-                  <img :src="post.images[1]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden h-1/3 w-full"><img v-bind="getGridImageProps(post.images[1])" /></div>
               </div>
             </div>
 
             <!-- 3 Images -->
             <div v-else-if="post.images.length === 3">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-3 gap-1.5 h-40 rounded-xl overflow-hidden border border-border">
-                <img :src="post.images[0]" class="w-full h-full object-cover" />
-                <img :src="post.images[1]" class="w-full h-full object-cover" />
-                <img :src="post.images[2]" class="w-full h-full object-cover" />
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="w-2/3 h-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="w-1/3 flex flex-col gap-1.5 h-full">
-                  <img :src="post.images[1]" class="w-full h-1/2 object-cover" />
-                  <img :src="post.images[2]" class="w-full h-1/2 object-cover" />
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="h-2/3 w-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="h-1/3 flex gap-1.5 w-full">
-                  <img :src="post.images[1]" class="w-1/2 h-full object-cover" />
-                  <img :src="post.images[2]" class="w-1/2 h-full object-cover" />
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
                 </div>
               </div>
             </div>
@@ -1020,29 +1062,25 @@ onUnmounted(() => {
             <!-- 4 Images -->
             <div v-else-if="post.images.length === 4">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <img :src="post.images[0]" class="w-full h-full object-cover" />
-                <img :src="post.images[1]" class="w-full h-full object-cover" />
-                <img :src="post.images[2]" class="w-full h-full object-cover" />
-                <img :src="post.images[3]" class="w-full h-full object-cover" />
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="w-2/3 h-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="w-1/3 flex flex-col gap-1.5 h-full">
-                  <img :src="post.images[1]" class="w-full h-[33%] object-cover" />
-                  <img :src="post.images[2]" class="w-full h-[33%] object-cover" />
-                  <img :src="post.images[3]" class="w-full h-[33%] object-cover" />
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="h-2/3 w-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="h-1/3 flex gap-1.5 w-full">
-                  <img :src="post.images[1]" class="w-1/3 h-full object-cover" />
-                  <img :src="post.images[2]" class="w-1/3 h-full object-cover" />
-                  <img :src="post.images[3]" class="w-1/3 h-full object-cover" />
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
                 </div>
               </div>
             </div>
@@ -1051,35 +1089,31 @@ onUnmounted(() => {
             <div v-else-if="post.images.length === 5">
               <div v-if="post.layout_type === 'grid-equal'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
                 <div class="grid grid-cols-2 gap-1.5 h-1/2">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                  <img :src="post.images[1]" class="w-full h-full object-cover" />
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
                 </div>
                 <div class="grid grid-cols-3 gap-1.5 h-1/2">
-                  <img :src="post.images[2]" class="w-full h-full object-cover" />
-                  <img :src="post.images[3]" class="w-full h-full object-cover" />
-                  <img :src="post.images[4]" class="w-full h-full object-cover" />
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[4])" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="w-1/2 h-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden w-1/2 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1.5 h-full">
-                  <img :src="post.images[1]" class="w-full h-full object-cover" />
-                  <img :src="post.images[2]" class="w-full h-full object-cover" />
-                  <img :src="post.images[3]" class="w-full h-full object-cover" />
-                  <img :src="post.images[4]" class="w-full h-full object-cover" />
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[4])" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="h-1/2 w-full">
-                  <img :src="post.images[0]" class="w-full h-full object-cover" />
-                </div>
+                <div class="relative overflow-hidden h-1/2 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
                 <div class="h-1/2 flex gap-1.5 w-full">
-                  <img :src="post.images[1]" class="w-1/4 h-full object-cover" />
-                  <img :src="post.images[2]" class="w-1/4 h-full object-cover" />
-                  <img :src="post.images[3]" class="w-1/4 h-full object-cover" />
-                  <img :src="post.images[4]" class="w-1/4 h-full object-cover" />
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[4])" /></div>
                 </div>
               </div>
             </div>
@@ -1208,28 +1242,28 @@ onUnmounted(() => {
                 <!-- 2 Images -->
                 <div v-if="previewItems.length === 2">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-2 gap-1 h-32 rounded-lg overflow-hidden">
-                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative h-full w-full">
-                      <img :src="item.url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
+                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-32 rounded-lg overflow-hidden">
-                    <div class="w-2/3 h-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="w-2/3 h-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
-                    <div class="w-1/3 h-full relative">
-                      <img :src="previewItems[1].url" @click="startCropImage(1)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="w-1/3 h-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
                       <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
-                    <div class="h-2/3 w-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="h-2/3 w-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
-                    <div class="h-1/3 w-full relative">
-                      <img :src="previewItems[1].url" @click="startCropImage(1)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="h-1/3 w-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
                       <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
@@ -1238,39 +1272,39 @@ onUnmounted(() => {
                 <!-- 3 Images -->
                 <div v-else-if="previewItems.length === 3">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-3 gap-1 h-24 rounded-lg overflow-hidden">
-                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative h-full w-full">
-                      <img :src="item.url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
+                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
-                    <div class="w-2/3 h-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="w-2/3 h-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/3 flex flex-col gap-1 h-full">
-                      <div class="h-1/2 relative">
-                        <img :src="previewItems[1].url" @click="startCropImage(1)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="h-1/2 relative overflow-hidden">
+                        <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
                         <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
-                      <div class="h-1/2 relative">
-                        <img :src="previewItems[2].url" @click="startCropImage(2)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="h-1/2 relative overflow-hidden">
+                        <img v-bind="getComposerPreviewProps(previewItems[2])" @click="startCropImage(2)" />
                         <button @click="removePreview(2)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
-                    <div class="h-2/3 w-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="h-2/3 w-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/3 flex gap-1 w-full">
-                      <div class="w-1/2 h-full relative">
-                        <img :src="previewItems[1].url" @click="startCropImage(1)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="w-1/2 h-full relative overflow-hidden">
+                        <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
                         <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
-                      <div class="w-1/2 h-full relative">
-                        <img :src="previewItems[2].url" @click="startCropImage(2)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="w-1/2 h-full relative overflow-hidden">
+                        <img v-bind="getComposerPreviewProps(previewItems[2])" @click="startCropImage(2)" />
                         <button @click="removePreview(2)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1280,31 +1314,31 @@ onUnmounted(() => {
                 <!-- 4 Images -->
                 <div v-else-if="previewItems.length === 4">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-2 gap-1 h-36 rounded-lg overflow-hidden">
-                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative h-full w-full">
-                      <img :src="item.url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
+                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
                     <div class="w-2/3 h-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/3 flex flex-col gap-1 h-full">
-                      <div class="h-[33%] relative" v-for="idx in [1, 2, 3]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="h-[33%] relative overflow-hidden" v-for="idx in [1, 2, 3]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
-                    <div class="h-2/3 w-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="h-2/3 w-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/3 flex gap-1 w-full">
-                      <div class="w-1/3 h-full relative" v-for="idx in [1, 2, 3]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="w-1/3 h-full relative overflow-hidden" v-for="idx in [1, 2, 3]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1315,38 +1349,38 @@ onUnmounted(() => {
                 <div v-else-if="previewItems.length === 5">
                   <div v-if="layoutType === 'grid-equal'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="grid grid-cols-2 gap-1 h-1/2">
-                      <div class="relative h-full w-full" v-for="idx in [0, 1]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="relative overflow-hidden h-full w-full" v-for="idx in [0, 1]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                     <div class="grid grid-cols-3 gap-1 h-1/2">
-                      <div class="relative h-full w-full" v-for="idx in [2, 3, 4]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="relative overflow-hidden h-full w-full" v-for="idx in [2, 3, 4]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
-                    <div class="w-1/2 h-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="w-1/2 h-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1 h-full">
-                      <div class="relative h-full w-full" v-for="idx in [1, 2, 3, 4]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="relative overflow-hidden h-full w-full" v-for="idx in [1, 2, 3, 4]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
-                    <div class="h-1/2 w-full relative">
-                      <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                    <div class="h-1/2 w-full relative overflow-hidden">
+                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/2 flex gap-1 w-full">
-                      <div class="w-1/4 h-full relative" v-for="idx in [1, 2, 3, 4]" :key="idx">
-                        <img :src="previewItems[idx].url" @click="startCropImage(idx)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+                      <div class="w-1/4 h-full relative overflow-hidden" v-for="idx in [1, 2, 3, 4]" :key="idx">
+                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1358,7 +1392,11 @@ onUnmounted(() => {
 
             <!-- Single image display -->
             <div v-else-if="previewItems.length === 1" class="relative rounded-xl overflow-hidden max-h-40 border border-[#EBE6DC] dark:border-transparent">
-              <img :src="previewItems[0].url" @click="startCropImage(0)" class="w-full h-full object-cover cursor-pointer hover:opacity-90 transition" />
+              <img 
+                :src="previewItems[0].originalUrl || previewItems[0].url"
+                class="w-full h-auto max-h-40 object-cover cursor-pointer hover:opacity-90 transition"
+                @click="startCropImage(0)"
+              />
               <button @click="removePreview(0)" class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center text-xs cursor-pointer">
                 <i class="ti ti-x"></i>
               </button>
@@ -1458,41 +1496,41 @@ onUnmounted(() => {
 
             <!-- Image layouts mapping -->
             <div v-if="activePost.images && activePost.images.length > 0" class="mt-2">
-              <div v-if="activePost.images.length === 1" class="rounded-xl overflow-hidden max-h-56 border border-border">
-                <img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" />
+              <div v-if="activePost.images.length === 1" class="relative rounded-xl overflow-hidden max-h-56 border border-border">
+                <img v-bind="getDetailImageProps(activePost.images[0])" class="w-full h-full object-cover" />
               </div>
               <div v-else-if="activePost.images.length === 2">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1 h-36 rounded-xl overflow-hidden border border-border">
-                  <img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" />
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-36 rounded-xl overflow-hidden border border-border">
-                  <div class="w-2/3 h-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
-                  <div class="w-1/3 h-full"><img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden w-1/3 h-full"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-44 rounded-xl overflow-hidden border border-border">
-                  <div class="h-2/3 w-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
-                  <div class="h-1/3 w-full"><img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden h-1/3 w-full"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
                 </div>
               </div>
               <div v-else-if="activePost.images.length === 3">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-3 gap-1 h-28 rounded-xl overflow-hidden border border-border">
-                  <img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-full object-cover cursor-zoom-in" />
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-40 rounded-xl overflow-hidden border border-border">
-                  <div class="w-2/3 h-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="w-1/3 flex flex-col gap-1 h-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-1/2 object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-1/2 object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-44 rounded-xl overflow-hidden border border-border">
-                  <div class="h-2/3 w-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="h-1/3 flex gap-1 w-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-1/2 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-1/2 h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
                   </div>
                 </div>
               </div>
@@ -1500,25 +1538,25 @@ onUnmounted(() => {
               <!-- 4 Images -->
               <div v-else-if="activePost.images.length === 4">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-full object-cover cursor-zoom-in" />
-                  <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-full h-full object-cover cursor-zoom-in" />
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <div class="w-2/3 h-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="w-1/3 flex flex-col gap-1 h-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-[33%] object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-[33%] object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-full h-[33%] object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
-                  <div class="h-2/3 w-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="h-1/3 flex gap-1 w-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-1/3 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-1/3 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-1/3 h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
                   </div>
                 </div>
               </div>
@@ -1527,31 +1565,31 @@ onUnmounted(() => {
               <div v-else-if="activePost.images.length === 5">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
                   <div class="grid grid-cols-2 gap-1 h-1/2">
-                    <img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
                   </div>
                   <div class="grid grid-cols-3 gap-1 h-1/2">
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[4]" @click="openLightbox(activePost.images[4])" class="w-full h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <div class="w-1/2 h-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden w-1/2 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1 h-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-full h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[4]" @click="openLightbox(activePost.images[4])" class="w-full h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
-                  <div class="h-1/2 w-full"><img :src="activePost.images[0]" @click="openLightbox(activePost.images[0])" class="w-full h-full object-cover cursor-zoom-in" /></div>
+                  <div class="relative overflow-hidden h-1/2 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
                   <div class="h-1/2 flex gap-1 w-full">
-                    <img :src="activePost.images[1]" @click="openLightbox(activePost.images[1])" class="w-1/4 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[2]" @click="openLightbox(activePost.images[2])" class="w-1/4 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[3]" @click="openLightbox(activePost.images[3])" class="w-1/4 h-full object-cover cursor-zoom-in" />
-                    <img :src="activePost.images[4]" @click="openLightbox(activePost.images[4])" class="w-1/4 h-full object-cover cursor-zoom-in" />
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
                   </div>
                 </div>
               </div>
