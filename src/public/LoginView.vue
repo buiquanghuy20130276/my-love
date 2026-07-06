@@ -44,11 +44,7 @@ async function handleLogin() {
 
     if (data.user) {
       await authStore.fetchProfile(data.user.id)
-      if (authStore.role === 'admin') {
-        router.push('/admin')
-      } else {
-        router.push('/')
-      }
+      router.push('/')
     }
   } catch (err: any) {
     errorMessage.value = 'Không thể kết nối đến máy chủ.'

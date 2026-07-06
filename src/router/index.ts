@@ -153,7 +153,7 @@ router.beforeEach(async (to, _from, next) => {
   } else if (to.matched.some(record => record.meta.requiresAdmin) && (!isAuth || role !== 'admin')) {
     next(isAuth ? '/' : '/login')
   } else if (to.matched.some(record => record.meta.requiresGuest) && isAuth) {
-    next(role === 'admin' ? '/admin' : '/')
+    next('/')
   } else {
     next()
   }
