@@ -124,7 +124,7 @@ function getTransformStyle(transform?: ImageTransform) {
   }
 }
 
-// img class helper: always absolute inset-0 so overflow:hidden on parent clips correctly
+// ─── Image-only prop helpers (used internally by getGridMediaProps etc.) ─────
 function getGridImageProps(imgUrl: string) {
   if (!imgUrl) return { src: '', class: '', style: {} }
   const parsed = parseImageWithTransform(imgUrl)
@@ -140,6 +140,7 @@ function getGridImageProps(imgUrl: string) {
 function getDetailImageProps(imgUrl: string) {
   if (!imgUrl) return { src: '', class: '', style: {}, onClick: () => {} }
   const parsed = parseImageWithTransform(imgUrl)
+  // onClick needs openLightbox — defined later but JS hoisting covers function declarations
   return {
     src: parsed.url,
     class: parsed.hasTransform 
@@ -163,6 +164,60 @@ function getComposerPreviewProps(item: PreviewItem) {
       : 'absolute inset-0 w-full h-full object-cover cursor-pointer hover:opacity-90 transition',
     style: hasTransform ? getTransformStyle(item.transform) : {}
   }
+}
+
+// ─── Video detection ────────────────────────────────────────────────────────
+const VIDEO_EXTS = /\.(mp4|webm|mov|avi|mkv|m4v|ogv)(#.*)?$/i
+function isVideoUrl(url: string): boolean {
+  if (!url) return false
+  return VIDEO_EXTS.test(url)
+}
+
+// ─── Unified media helpers (returns {tag, attrs}) for <component :is> ────────
+function getGridMediaProps(url: string) {
+  if (!url) return { tag: 'img', attrs: { src: '', class: '' } }
+  if (isVideoUrl(url)) {
+    return {
+      tag: 'video',
+      attrs: {
+        src: url.split('#')[0],
+        class: 'absolute inset-0 w-full h-full object-cover select-none pointer-events-none',
+        autoplay: true, muted: true, loop: true, playsinline: true
+      }
+    }
+  }
+  return { tag: 'img', attrs: getGridImageProps(url) }
+}
+
+function getDetailMediaProps(url: string) {
+  if (!url) return { tag: 'img', attrs: { src: '', class: '' } }
+  if (isVideoUrl(url)) {
+    return {
+      tag: 'video',
+      attrs: {
+        src: url.split('#')[0],
+        class: 'absolute inset-0 w-full h-full object-cover select-none cursor-pointer',
+        controls: true, playsinline: true,
+        onClick: (e: MouseEvent) => e.stopPropagation()
+      }
+    }
+  }
+  return { tag: 'img', attrs: getDetailImageProps(url) }
+}
+
+function getComposerMediaProps(item: PreviewItem) {
+  if (!item) return { tag: 'img', attrs: { src: '', class: '' } }
+  if (isVideoUrl(item.url)) {
+    return {
+      tag: 'video',
+      attrs: {
+        src: item.url.split('#')[0],
+        class: 'absolute inset-0 w-full h-full object-cover cursor-pointer hover:opacity-90 transition',
+        playsinline: true, controls: true
+      }
+    }
+  }
+  return { tag: 'img', attrs: getComposerPreviewProps(item) }
 }
 
 // State variables
@@ -411,8 +466,11 @@ function handleTouchMove(e: TouchEvent) {
 }
 
 function startCropImage(idx: number) {
-  selectedPreviewIndex.value = idx
   const item = previewItems.value[idx]
+  // Skip crop editor for videos
+  if (isVideoUrl(item.url)) return
+  
+  selectedPreviewIndex.value = idx
   // Always strip hash transform fragment so we load the pure original image
   const rawSrc = (item.originalUrl || item.url).split('#')[0]
   cropImageSrc.value = rawSrc
@@ -655,7 +713,7 @@ function handleFileChange(e: Event) {
   if (!target.files) return
   const files = Array.from(target.files)
   if (previewItems.value.length + files.length > 5) {
-    toast.error('Chỉ được tải lên tối đa 5 ảnh!')
+    toast.error('Chỉ được tải lên tối đa 5 ảnh/video!')
     return
   }
   files.forEach(f => {
@@ -696,14 +754,29 @@ async function publishPost() {
     for (const item of previewItems.value) {
       let publicUrl = ''
       if (item.file) {
-        // Compress and upload original uncropped file
-        const compressed = await compressImage(item.file)
-        const fileName = `feed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.webp`
+        const isVid = item.file.type.startsWith('video/')
+        let uploadBlob: Blob
+        let contentType: string
+        let ext: string
+
+        if (isVid) {
+          // Upload video as-is (no compression)
+          uploadBlob = item.file
+          contentType = item.file.type || 'video/mp4'
+          ext = item.file.name.split('.').pop() || 'mp4'
+        } else {
+          // Compress image to webp
+          uploadBlob = await compressImage(item.file)
+          contentType = 'image/webp'
+          ext = 'webp'
+        }
+
+        const fileName = `feed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.${ext}`
         const filePath = `feed/${fileName}`
         
         const { error: uploadError } = await supabase.storage
           .from('letter-images')
-          .upload(filePath, compressed, { cacheControl: '3600', contentType: 'image/webp' })
+          .upload(filePath, uploadBlob, { cacheControl: '3600', contentType })
         
         if (uploadError) throw uploadError
         
@@ -713,12 +786,13 @@ async function publishPost() {
           
         publicUrl = data.publicUrl
       } else {
-        // Reuse existing image url, splitting off any old hash
+        // Reuse existing url, stripping any old hash
         publicUrl = item.url.split('#')[0]
       }
       
-      // Append transform hash if present
-      const transformHash = item.transform 
+      // Append transform hash only for images (not videos)
+      const isVidUrl = isVideoUrl(publicUrl)
+      const transformHash = (!isVidUrl && item.transform)
         ? `#scale=${item.transform.scale}&x=${item.transform.x}&y=${item.transform.y}` 
         : ''
       finalImages.push(publicUrl + transformHash)
@@ -1023,38 +1097,38 @@ onUnmounted(() => {
             <!-- 2 Images -->
             <div v-else-if="post.images.length === 2">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1.5 h-48 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-48 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                <div class="relative overflow-hidden w-1/3 h-full"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                <div class="relative overflow-hidden w-2/3 h-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                <div class="relative overflow-hidden w-1/3 h-full"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                <div class="relative overflow-hidden h-1/3 w-full"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                <div class="relative overflow-hidden h-2/3 w-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                <div class="relative overflow-hidden h-1/3 w-full"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
               </div>
             </div>
 
             <!-- 3 Images -->
             <div v-else-if="post.images.length === 3">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-3 gap-1.5 h-40 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden w-2/3 h-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="w-1/3 flex flex-col gap-1.5 h-full">
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden h-2/3 w-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="h-1/3 flex gap-1.5 w-full">
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
                 </div>
               </div>
             </div>
@@ -1062,25 +1136,25 @@ onUnmounted(() => {
             <!-- 4 Images -->
             <div v-else-if="post.images.length === 4">
               <div v-if="post.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden w-2/3 h-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="w-1/3 flex flex-col gap-1.5 h-full">
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden h-2/3 w-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="h-1/3 flex gap-1.5 w-full">
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
                 </div>
               </div>
             </div>
@@ -1089,31 +1163,31 @@ onUnmounted(() => {
             <div v-else-if="post.images.length === 5">
               <div v-if="post.layout_type === 'grid-equal'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
                 <div class="grid grid-cols-2 gap-1.5 h-1/2">
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[0])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
                 </div>
                 <div class="grid grid-cols-3 gap-1.5 h-1/2">
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[4])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[4]).tag" v-bind="getGridMediaProps(post.images[4]).attrs" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'left-large'" class="flex gap-1.5 h-56 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden w-1/2 h-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden w-1/2 h-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1.5 h-full">
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[3])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getGridImageProps(post.images[4])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getGridMediaProps(post.images[4]).tag" v-bind="getGridMediaProps(post.images[4]).attrs" /></div>
                 </div>
               </div>
               <div v-else-if="post.layout_type === 'top-large'" class="flex flex-col gap-1.5 h-64 rounded-xl overflow-hidden border border-border">
-                <div class="relative overflow-hidden h-1/2 w-full"><img v-bind="getGridImageProps(post.images[0])" /></div>
+                <div class="relative overflow-hidden h-1/2 w-full"><component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" /></div>
                 <div class="h-1/2 flex gap-1.5 w-full">
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[1])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[2])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[3])" /></div>
-                  <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getGridImageProps(post.images[4])" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[1]).tag" v-bind="getGridMediaProps(post.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[2]).tag" v-bind="getGridMediaProps(post.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[3]).tag" v-bind="getGridMediaProps(post.images[3]).attrs" /></div>
+                  <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getGridMediaProps(post.images[4]).tag" v-bind="getGridMediaProps(post.images[4]).attrs" /></div>
                 </div>
               </div>
             </div>
@@ -1243,27 +1317,27 @@ onUnmounted(() => {
                 <div v-if="previewItems.length === 2">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-2 gap-1 h-32 rounded-lg overflow-hidden">
                     <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
-                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
+                      <component :is="getComposerMediaProps(item).tag" v-bind="getComposerMediaProps(item).attrs" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-32 rounded-lg overflow-hidden">
                     <div class="w-2/3 h-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/3 h-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
+                      <component :is="getComposerMediaProps(previewItems[1]).tag" v-bind="getComposerMediaProps(previewItems[1]).attrs" @click="startCropImage(1)" />
                       <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="h-2/3 w-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/3 w-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
+                      <component :is="getComposerMediaProps(previewItems[1]).tag" v-bind="getComposerMediaProps(previewItems[1]).attrs" @click="startCropImage(1)" />
                       <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
@@ -1273,38 +1347,38 @@ onUnmounted(() => {
                 <div v-else-if="previewItems.length === 3">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-3 gap-1 h-24 rounded-lg overflow-hidden">
                     <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
-                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
+                      <component :is="getComposerMediaProps(item).tag" v-bind="getComposerMediaProps(item).attrs" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
                     <div class="w-2/3 h-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/3 flex flex-col gap-1 h-full">
                       <div class="h-1/2 relative overflow-hidden">
-                        <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
+                        <component :is="getComposerMediaProps(previewItems[1]).tag" v-bind="getComposerMediaProps(previewItems[1]).attrs" @click="startCropImage(1)" />
                         <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                       <div class="h-1/2 relative overflow-hidden">
-                        <img v-bind="getComposerPreviewProps(previewItems[2])" @click="startCropImage(2)" />
+                        <component :is="getComposerMediaProps(previewItems[2]).tag" v-bind="getComposerMediaProps(previewItems[2]).attrs" @click="startCropImage(2)" />
                         <button @click="removePreview(2)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="h-2/3 w-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/3 flex gap-1 w-full">
                       <div class="w-1/2 h-full relative overflow-hidden">
-                        <img v-bind="getComposerPreviewProps(previewItems[1])" @click="startCropImage(1)" />
+                        <component :is="getComposerMediaProps(previewItems[1]).tag" v-bind="getComposerMediaProps(previewItems[1]).attrs" @click="startCropImage(1)" />
                         <button @click="removePreview(1)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                       <div class="w-1/2 h-full relative overflow-hidden">
-                        <img v-bind="getComposerPreviewProps(previewItems[2])" @click="startCropImage(2)" />
+                        <component :is="getComposerMediaProps(previewItems[2]).tag" v-bind="getComposerMediaProps(previewItems[2]).attrs" @click="startCropImage(2)" />
                         <button @click="removePreview(2)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1315,30 +1389,30 @@ onUnmounted(() => {
                 <div v-else-if="previewItems.length === 4">
                   <div v-if="layoutType === 'grid-equal'" class="grid grid-cols-2 gap-1 h-36 rounded-lg overflow-hidden">
                     <div v-for="(item, idx) in previewItems" :key="idx" class="relative overflow-hidden h-full w-full">
-                      <img v-bind="getComposerPreviewProps(item)" @click="startCropImage(idx)" />
+                      <component :is="getComposerMediaProps(item).tag" v-bind="getComposerMediaProps(item).attrs" @click="startCropImage(idx)" />
                       <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
                     <div class="w-2/3 h-full relative">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/3 flex flex-col gap-1 h-full">
                       <div class="h-[33%] relative overflow-hidden" v-for="idx in [1, 2, 3]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="h-2/3 w-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/3 flex gap-1 w-full">
                       <div class="w-1/3 h-full relative overflow-hidden" v-for="idx in [1, 2, 3]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1350,37 +1424,37 @@ onUnmounted(() => {
                   <div v-if="layoutType === 'grid-equal'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="grid grid-cols-2 gap-1 h-1/2">
                       <div class="relative overflow-hidden h-full w-full" v-for="idx in [0, 1]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                     <div class="grid grid-cols-3 gap-1 h-1/2">
                       <div class="relative overflow-hidden h-full w-full" v-for="idx in [2, 3, 4]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'left-large'" class="flex gap-1 h-36 rounded-lg overflow-hidden">
                     <div class="w-1/2 h-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1 h-full">
                       <div class="relative overflow-hidden h-full w-full" v-for="idx in [1, 2, 3, 4]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
                   </div>
                   <div v-else-if="layoutType === 'top-large'" class="flex flex-col gap-1 h-44 rounded-lg overflow-hidden">
                     <div class="h-1/2 w-full relative overflow-hidden">
-                      <img v-bind="getComposerPreviewProps(previewItems[0])" @click="startCropImage(0)" />
+                      <component :is="getComposerMediaProps(previewItems[0]).tag" v-bind="getComposerMediaProps(previewItems[0]).attrs" @click="startCropImage(0)" />
                       <button @click="removePreview(0)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                     </div>
                     <div class="h-1/2 flex gap-1 w-full">
                       <div class="w-1/4 h-full relative overflow-hidden" v-for="idx in [1, 2, 3, 4]" :key="idx">
-                        <img v-bind="getComposerPreviewProps(previewItems[idx])" @click="startCropImage(idx)" />
+                        <component :is="getComposerMediaProps(previewItems[idx]).tag" v-bind="getComposerMediaProps(previewItems[idx]).attrs" @click="startCropImage(idx)" />
                         <button @click="removePreview(idx)" class="absolute top-1 right-1 w-4 h-4 rounded-full bg-black/60 text-white flex items-center justify-center text-[8px] cursor-pointer"><i class="ti ti-x"></i></button>
                       </div>
                     </div>
@@ -1409,7 +1483,7 @@ onUnmounted(() => {
               <input 
                 type="file" 
                 multiple 
-                accept="image/*" 
+                accept="image/*,video/*" 
                 id="modal-image-upload" 
                 class="hidden" 
                 @change="handleFileChange"
@@ -1420,8 +1494,8 @@ onUnmounted(() => {
                 class="flex items-center gap-1 text-[10px] font-semibold text-[#993556] dark:text-[#F4C0D1] bg-[#FBEAF0] dark:bg-rosewood-950/40 py-1.5 px-3.5 rounded-full cursor-pointer hover:bg-[#F9D6E2] dark:hover:bg-rosewood-900/50 transition"
                 :class="previewItems.length >= 5 ? 'opacity-50 pointer-events-none' : ''"
               >
-                <i class="ti ti-photo-plus"></i>
-                <span>Thêm ảnh (Tối đa 5)</span>
+                <i class="ti ti-photo-video"></i>
+                <span>Thêm ảnh/video (Tối đa 5)</span>
               </label>
             </div>
 
@@ -1501,36 +1575,36 @@ onUnmounted(() => {
               </div>
               <div v-else-if="activePost.images.length === 2">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1 h-36 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-36 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                  <div class="relative overflow-hidden w-1/3 h-full"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden w-1/3 h-full"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-44 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                  <div class="relative overflow-hidden h-1/3 w-full"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden h-1/3 w-full"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
                 </div>
               </div>
               <div v-else-if="activePost.images.length === 3">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-3 gap-1 h-28 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-40 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="w-1/3 flex flex-col gap-1 h-full">
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-44 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="h-1/3 flex gap-1 w-full">
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
                   </div>
                 </div>
               </div>
@@ -1538,25 +1612,25 @@ onUnmounted(() => {
               <!-- 4 Images -->
               <div v-else-if="activePost.images.length === 4">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                  <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                  <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden w-2/3 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden w-2/3 h-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="w-1/3 flex flex-col gap-1 h-full">
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden h-2/3 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden h-2/3 w-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="h-1/3 flex gap-1 w-full">
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
                   </div>
                 </div>
               </div>
@@ -1565,31 +1639,31 @@ onUnmounted(() => {
               <div v-else-if="activePost.images.length === 5">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
                   <div class="grid grid-cols-2 gap-1 h-1/2">
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
                   </div>
                   <div class="grid grid-cols-3 gap-1 h-1/2">
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[4]).tag" v-bind="getDetailMediaProps(activePost.images[4]).attrs" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'left-large'" class="flex gap-1 h-48 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden w-1/2 h-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden w-1/2 h-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="w-1/2 grid grid-cols-2 grid-rows-2 gap-1 h-full">
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
-                    <div class="relative overflow-hidden"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
+                    <div class="relative overflow-hidden"><component :is="getDetailMediaProps(activePost.images[4]).tag" v-bind="getDetailMediaProps(activePost.images[4]).attrs" /></div>
                   </div>
                 </div>
                 <div v-else-if="activePost.layout_type === 'top-large'" class="flex flex-col gap-1 h-56 rounded-xl overflow-hidden border border-border">
-                  <div class="relative overflow-hidden h-1/2 w-full"><img v-bind="getDetailImageProps(activePost.images[0])" /></div>
+                  <div class="relative overflow-hidden h-1/2 w-full"><component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" /></div>
                   <div class="h-1/2 flex gap-1 w-full">
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[1])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[2])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[3])" /></div>
-                    <div class="relative overflow-hidden flex-1 min-h-0"><img v-bind="getDetailImageProps(activePost.images[4])" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[1]).tag" v-bind="getDetailMediaProps(activePost.images[1]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[2]).tag" v-bind="getDetailMediaProps(activePost.images[2]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[3]).tag" v-bind="getDetailMediaProps(activePost.images[3]).attrs" /></div>
+                    <div class="relative overflow-hidden flex-1 min-h-0"><component :is="getDetailMediaProps(activePost.images[4]).tag" v-bind="getDetailMediaProps(activePost.images[4]).attrs" /></div>
                   </div>
                 </div>
               </div>
