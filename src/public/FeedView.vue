@@ -190,7 +190,14 @@ function getGridMediaProps(url: string) {
       attrs: {
         src: url.split('#')[0],
         class: 'absolute inset-0 w-full h-full object-cover select-none pointer-events-none',
-        autoplay: true, muted: true, loop: true, playsinline: true
+        autoplay: true, muted: true, loop: true, playsinline: true,
+        onLoadedmetadata: (e: Event) => {
+          const videoEl = e.target as HTMLVideoElement
+          videoEl.muted = true
+          videoEl.play().catch((err) => {
+            console.warn('Mobile autoplay failed or blocked:', err)
+          })
+        }
       }
     }
   }
