@@ -2,26 +2,26 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 // Public Views
-import LoginView from '../public/LoginView.vue'
-import LandingView from '../public/LandingView.vue'
-import LettersView from '../public/LettersView.vue'
-import TimelineDetailView from '../public/TimelineDetailView.vue'
-import LoveMapView from '../public/LoveMapView.vue'
-import GalleryView from '../public/GalleryView.vue'
-import QuizView from '../public/QuizView.vue'
+const LoginView = () => import('../public/LoginView.vue')
+const LandingView = () => import('../public/LandingView.vue')
+const LettersView = () => import('../public/LettersView.vue')
+const TimelineDetailView = () => import('../public/TimelineDetailView.vue')
+const LoveMapView = () => import('../public/LoveMapView.vue')
+const GalleryView = () => import('../public/GalleryView.vue')
+const QuizView = () => import('../public/QuizView.vue')
+const FeedView = () => import('../public/FeedView.vue')
 
 // Admin Views
-import AdminLayout from '../admin/AdminLayout.vue'
-import AdminLettersListView from '../admin/AdminLettersListView.vue'
-import AdminLetterEditView from '../admin/AdminLetterEditView.vue'
-import AdminTimelineListView from '../admin/AdminTimelineListView.vue'
-import AdminTimelineEditView from '../admin/AdminTimelineEditView.vue'
-import AdminSettingsView from '../admin/AdminSettingsView.vue'
-import AdminMapListView from '../admin/AdminMapListView.vue'
-import AdminMapEditView from '../admin/AdminMapEditView.vue'
-import AdminGalleryView from '../admin/AdminGalleryView.vue'
-import AdminBucketView from '../admin/AdminBucketView.vue'
-import FeedView from '../public/FeedView.vue'
+const AdminLayout = () => import('../admin/AdminLayout.vue')
+const AdminLettersListView = () => import('../admin/AdminLettersListView.vue')
+const AdminLetterEditView = () => import('../admin/AdminLetterEditView.vue')
+const AdminTimelineListView = () => import('../admin/AdminTimelineListView.vue')
+const AdminTimelineEditView = () => import('../admin/AdminTimelineEditView.vue')
+const AdminSettingsView = () => import('../admin/AdminSettingsView.vue')
+const AdminMapListView = () => import('../admin/AdminMapListView.vue')
+const AdminMapEditView = () => import('../admin/AdminMapEditView.vue')
+const AdminGalleryView = () => import('../admin/AdminGalleryView.vue')
+const AdminBucketView = () => import('../admin/AdminBucketView.vue')
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
