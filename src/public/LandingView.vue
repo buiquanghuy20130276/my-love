@@ -559,51 +559,84 @@ onUnmounted(() => {
             </div>
 
             <!-- Vertical Timeline list -->
-            <div v-else class="relative pl-6 space-y-8 before:absolute before:left-[10px] before:top-2 before:bottom-2 before:w-[0.5px] before:bg-border-strong">
+            <div v-else class="relative pl-7 space-y-6 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[1.5px] before:bg-gradient-to-b before:from-[#D4537E] before:to-romantic-200/30 dark:before:to-rosewood-900/10">
               <div 
                 v-for="event in timelineEvents" 
                 :key="event.id"
-                class="relative"
+                class="relative group"
               >
                 <!-- Marker Point -->
                 <span 
-                  class="absolute left-[-21px] top-1.5 w-2.5 h-2.5 rounded-full border border-surface-2 dark:border-[#1C1A1D] z-10"
-                  :class="event.is_special ? 'bg-[#D4537E]' : 'bg-border-strong'"
+                  v-if="event.is_special"
+                  class="absolute left-[-24.5px] top-1 w-[9px] h-[9px] rounded-full bg-[#D4537E] ring-4 ring-[#FBEAF0] dark:ring-[#D4537E]/20 z-10 animate-pulse"
+                ></span>
+                <span 
+                  v-else
+                  class="absolute left-[-23px] top-1.5 w-2 w-2 rounded-full bg-border-strong dark:bg-neutral-600 border-2 border-surface-2 dark:border-[#1C1A1D] group-hover:bg-[#D4537E] transition z-10"
                 ></span>
 
                 <!-- Event Card -->
                 <RouterLink 
                   :to="`/timeline/${event.id}`"
-                  class="block rounded-2xl border border-border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm"
-                  :class="event.is_special ? 'bg-[#FBEAF0] dark:bg-rosewood-950/20 border-romantic-200/40 dark:border-rosewood-900/30' : 'bg-surface-2 dark:bg-[#1D1A1F]/30'"
+                  class="block rounded-2xl border p-3.5 transition-all duration-300 transform group-hover:scale-[1.01] group-hover:shadow-md hover:border-[#ED93B1]/40"
+                  :class="event.is_special 
+                    ? 'bg-gradient-to-br from-[#FDFBF7] to-[#FDF3F6] dark:from-[#251E22] dark:to-[#1F1C18] border-romantic-200/40 dark:border-rosewood-900/40' 
+                    : 'bg-[#FDFBF7] dark:bg-[#1F1C18] border-[#EBE6DC] dark:border-transparent'"
                 >
-                  <!-- Thumbnail if images exist -->
+                  <!-- Media Container (Polaroid/Square Image) -->
                   <div 
                     v-if="event.timeline_images && event.timeline_images.length > 0"
-                    class="w-full aspect-square rounded-xl bg-surface-1 dark:bg-[#121013] overflow-hidden mb-3 border border-border"
+                    class="w-full aspect-square rounded-xl bg-surface-1 dark:bg-[#121013] overflow-hidden mb-3 border border-[#EBE6DC]/60 dark:border-transparent relative shadow-inner"
                   >
                     <img 
                       :src="event.timeline_images[0].image_url" 
-                      class="w-full h-full object-cover" 
+                      class="w-full h-full object-cover transition duration-700 group-hover:scale-[1.03]" 
                       alt="Ảnh kỉ niệm"
                     />
+                    <!-- Floating Date Badge -->
+                    <div class="absolute top-2.5 left-2.5 bg-black/40 backdrop-blur-md text-white text-[9px] font-bold px-2.5 py-0.5 rounded-full select-none shadow-sm flex items-center gap-1">
+                      <i class="ti ti-calendar-event text-[10px]"></i>
+                      <span>{{ displayEventDate(event.event_date) }}</span>
+                    </div>
                   </div>
 
-                  <!-- Fallback empty photo box if no image and marked special -->
+                  <!-- Fallback box if no image and marked special -->
                   <div 
                     v-else-if="event.is_special"
-                    class="w-full h-24 rounded-xl bg-romantic-100/30 dark:bg-rosewood-950/10 flex items-center justify-center mb-3 border border-dashed border-romantic-300/30"
+                    class="w-full aspect-[16/5] rounded-xl bg-romantic-100/20 dark:bg-rosewood-950/10 flex items-center justify-center mb-3 border border-dashed border-romantic-300/30 relative"
                   >
-                    <i class="ti ti-photo text-lg text-romantic-400"></i>
+                    <i class="ti ti-heart text-romantic-400 text-sm animate-beat"></i>
+                    <!-- Floating Date Badge -->
+                    <div class="absolute top-2.5 left-2.5 bg-black/40 backdrop-blur-md text-white text-[9px] font-bold px-2.5 py-0.5 rounded-full select-none shadow-sm flex items-center gap-1">
+                      <i class="ti ti-calendar-event text-[10px]"></i>
+                      <span>{{ displayEventDate(event.event_date) }}</span>
+                    </div>
                   </div>
 
-                  <!-- Text info -->
-                  <p class="text-[13px] font-medium text-gray-900 dark:text-gray-100">
-                    {{ event.title }}
-                  </p>
-                  <p class="text-[11px] text-text-muted mt-0.5 select-none">
-                    {{ displayEventDate(event.event_date) }}
-                  </p>
+                  <!-- Date for regular events with no photo -->
+                  <div 
+                    v-else
+                    class="text-[9px] text-[#A89A89] dark:text-neutral-500 font-bold tracking-wider uppercase mb-1 flex items-center gap-1 select-none"
+                  >
+                    <i class="ti ti-calendar-event text-[10px]"></i>
+                    <span>{{ displayEventDate(event.event_date) }}</span>
+                  </div>
+
+                  <!-- Card Text Footer -->
+                  <div class="flex items-start justify-between gap-2.5">
+                    <p class="text-xs font-semibold text-gray-900 dark:text-gray-100 leading-snug group-hover:text-[#D4537E] transition duration-200">
+                      {{ event.title }}
+                    </p>
+                    
+                    <!-- Special Milestone Badge tag -->
+                    <span 
+                      v-if="event.is_special" 
+                      class="text-[8px] font-bold px-1.5 py-0.5 rounded-md bg-[#FDE2EC] text-[#D4537E] dark:bg-rosewood-950/40 dark:text-[#F4C0D1] select-none flex-shrink-0 flex items-center gap-0.5"
+                    >
+                      <i class="ti ti-sparkles text-[9px]"></i>
+                      <span>Đặc biệt</span>
+                    </span>
+                  </div>
                 </RouterLink>
               </div>
             </div>
@@ -798,3 +831,13 @@ onUnmounted(() => {
     <Navbar />
   </div>
 </template>
+
+<style scoped>
+@keyframes beat {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+.animate-beat {
+  animation: beat 1.4s infinite ease-in-out;
+}
+</style>
