@@ -1484,14 +1484,14 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Single image display -->
-            <div v-else-if="previewItems.length === 1" class="relative rounded-xl overflow-hidden max-h-40 border border-[#EBE6DC] dark:border-transparent">
-              <img 
-                :src="previewItems[0].originalUrl || previewItems[0].url"
-                class="w-full h-auto max-h-40 object-cover cursor-pointer hover:opacity-90 transition"
+            <!-- Single image/video display -->
+            <div v-else-if="previewItems.length === 1" class="relative rounded-xl overflow-hidden h-40 border border-[#EBE6DC] dark:border-transparent">
+              <component 
+                :is="getComposerMediaProps(previewItems[0]).tag" 
+                v-bind="getComposerMediaProps(previewItems[0]).attrs" 
                 @click="startCropImage(0)"
               />
-              <button @click="removePreview(0)" class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center text-xs cursor-pointer">
+              <button @click="removePreview(0)" class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center text-xs cursor-pointer z-10">
                 <i class="ti ti-x"></i>
               </button>
             </div>
