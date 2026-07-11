@@ -7,7 +7,7 @@
  * @param quality The WebP output quality (0.0 to 1.0)
  * @returns A promise resolving to a compressed Blob (or original File if not an image or fails)
  */
-export function compressImage(file: File, maxDimension: number = 1600, quality: number = 0.8): Promise<Blob> {
+export function compressImage(file: File, maxDimension: number = 2560, quality: number = 0.85): Promise<Blob> {
   return new Promise((resolve) => {
     // If it's not an image file, pass it through directly
     if (!file.type.startsWith('image/')) {

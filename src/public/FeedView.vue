@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient'
 import { useAuthStore } from '../stores/auth'
 import { toast } from 'vue-sonner'
 import { compressImage } from '../lib/imageCompressor'
+import { compressVideo } from '../lib/videoCompressor'
 import Navbar from '../components/Navbar.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 import dayjs from 'dayjs'
@@ -767,10 +768,22 @@ async function publishPost() {
         let ext: string
 
         if (isVid) {
-          // Upload video as-is (no compression)
-          uploadBlob = item.file
-          contentType = item.file.type || 'video/mp4'
-          ext = item.file.name.split('.').pop() || 'mp4'
+          // Show compressing toast
+          const videoToastId = toast.loading('Đang tối ưu hóa dung lượng video... ⏳')
+          
+          try {
+            uploadBlob = await compressVideo(item.file)
+          } catch (err) {
+            console.error('Video compression failed, using original:', err)
+            uploadBlob = item.file
+          }
+          
+          toast.dismiss(videoToastId)
+          
+          contentType = uploadBlob.type || 'video/mp4'
+          // Extract file extension cleanly
+          ext = contentType.split('/').pop()?.split(';')[0] || 'mp4'
+          if (ext === 'x-matroska') ext = 'mkv'
         } else {
           // Compress image to webp
           uploadBlob = await compressImage(item.file)

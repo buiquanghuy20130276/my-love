@@ -53,10 +53,38 @@ const loading = ref(true)
 
 // Modal add quiz state
 const showAddModal = ref(false)
+const isEditingQuiz = ref(false)
+const editingQuizId = ref<string | null>(null)
 const newQuestionText = ref('')
 const newQuizType = ref<'essay' | 'single' | 'multiple'>('single')
 const newOptions = ref<string[]>(['', ''])
 const submittingQuiz = ref(false)
+
+function openCreateQuiz() {
+  isEditingQuiz.value = false
+  editingQuizId.value = null
+  newQuestionText.value = ''
+  newQuizType.value = 'single'
+  newOptions.value = ['', '']
+  showAddModal.value = true
+}
+
+function openEditQuiz(q: QuizQuestion) {
+  isEditingQuiz.value = true
+  editingQuizId.value = q.id
+  newQuestionText.value = q.question
+  newQuizType.value = q.quiz_type
+  newOptions.value = q.options ? [...q.options] : ['', '']
+  showAddModal.value = true
+}
+
+async function saveQuizQuestion() {
+  if (isEditingQuiz.value) {
+    await updateQuizQuestion()
+  } else {
+    await createQuizQuestion()
+  }
+}
 
 // Detail modal state
 const activeQuestion = ref<QuizQuestion | null>(null)
@@ -194,6 +222,62 @@ async function createQuizQuestion() {
   } finally {
     submittingQuiz.value = false
   }
+}
+
+async function updateQuizQuestion() {
+  if (!newQuestionText.value.trim() || !editingQuizId.value) return
+
+  if (newQuizType.value !== 'essay') {
+    const validOptions = newOptions.value.filter(o => o.trim())
+    if (validOptions.length < 2) {
+      toast.error('Vui lòng nhập ít nhất 2 lựa chọn.')
+      return
+    }
+  }
+
+  submittingQuiz.value = true
+  try {
+    const optionsPayload = newQuizType.value !== 'essay' ? newOptions.value.filter(o => o.trim()) : null
+    
+    const { error } = await supabase
+      .from('quiz_questions')
+      .update({
+        question: newQuestionText.value.trim(),
+        quiz_type: newQuizType.value,
+        options: optionsPayload
+      })
+      .eq('id', editingQuizId.value)
+
+    if (error) throw error
+    toast.success('Đã cập nhật câu đố thành công!')
+    showAddModal.value = false
+    loadQuizData()
+  } catch (err: any) {
+    toast.error('Lỗi khi cập nhật câu đố: ' + err.message)
+  } finally {
+    submittingQuiz.value = false
+  }
+}
+
+async function deleteQuizQuestion(questionId: string) {
+  openConfirmModal(
+    'Xóa câu đố',
+    'Bạn có chắc chắn muốn xóa câu đố này không? Tất cả các câu trả lời liên quan cũng sẽ bị xóa.',
+    async () => {
+      try {
+        const { error } = await supabase
+          .from('quiz_questions')
+          .delete()
+          .eq('id', questionId)
+
+        if (error) throw error
+        toast.success('Đã xóa câu đố thành công!')
+        loadQuizData()
+      } catch (err: any) {
+        toast.error('Lỗi khi xóa câu đố: ' + err.message)
+      }
+    }
+  )
 }
 
 // Fetch all answers & comments for selected question details
@@ -448,7 +532,7 @@ onMounted(() => {
           <p class="text-xs text-text-secondary">Trả lời những câu hỏi đố vui từ đối phương</p>
         </div>
         <button 
-          @click="showAddModal = true"
+          @click="openCreateQuiz"
           class="bg-[#D4537E] hover:bg-[#c2436d] text-white text-[11px] font-semibold px-3 py-1.5 rounded-full cursor-pointer flex items-center gap-1 transition"
         >
           <i class="ti ti-plus"></i>
@@ -510,7 +594,27 @@ onMounted(() => {
               <span>Chưa trả lời</span>
             </span>
 
-            <span class="text-text-secondary hover:text-[#D4537E] font-medium flex items-center gap-0.5">
+            <!-- Question Owner Controls -->
+            <div v-if="q.created_by === authStore.user?.id" class="flex items-center gap-2 select-none text-[10px] ml-auto mr-3">
+              <button 
+                @click.stop="openEditQuiz(q)"
+                class="text-[#D4537E] hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-0.5"
+                title="Sửa câu hỏi"
+              >
+                <i class="ti ti-edit"></i>
+                <span>Sửa</span>
+              </button>
+              <button 
+                @click.stop="deleteQuizQuestion(q.id)"
+                class="text-red-500 hover:underline font-semibold flex items-center gap-0.5 cursor-pointer p-0.5"
+                title="Xóa câu hỏi"
+              >
+                <i class="ti ti-trash"></i>
+                <span>Xóa</span>
+              </button>
+            </div>
+
+            <span class="text-text-secondary hover:text-[#D4537E] font-medium flex items-center gap-0.5" :class="q.created_by === authStore.user?.id ? '' : 'ml-auto'">
               <span>Xem chi tiết</span>
               <i class="ti ti-chevron-right"></i>
             </span>
@@ -530,13 +634,13 @@ onMounted(() => {
       >
         <div class="w-full max-w-[360px] bg-[#FDFBF7] dark:bg-[#1F1C18] border border-cream-200 dark:border-cream-950/40 rounded-3xl p-5 shadow-2xl space-y-4 text-[#4B2F15] dark:text-[#E2CBB2]">
           <header class="flex justify-between items-center border-b border-border pb-2.5">
-            <h3 class="text-xs font-bold uppercase tracking-wider text-gray-900 dark:text-gray-100">Tạo câu đố mới</h3>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-gray-900 dark:text-gray-100">{{ isEditingQuiz ? 'Chỉnh sửa câu đố' : 'Tạo câu đố mới' }}</h3>
             <button @click="showAddModal = false" class="text-text-muted hover:text-gray-900 dark:hover:text-gray-100 text-xs">
               <i class="ti ti-x"></i>
             </button>
           </header>
 
-          <form @submit.prevent="createQuizQuestion" class="space-y-4">
+          <form @submit.prevent="saveQuizQuestion" class="space-y-4">
             <!-- Question text -->
             <div>
               <label class="text-[10px] text-text-secondary block mb-1">Nội dung câu hỏi</label>
@@ -611,7 +715,7 @@ onMounted(() => {
                 :disabled="submittingQuiz"
               >
                 <i v-if="submittingQuiz" class="ti ti-loader animate-spin text-xs"></i>
-                <span>Tạo câu đố</span>
+                <span>{{ isEditingQuiz ? 'Lưu thay đổi' : 'Tạo câu đố' }}</span>
               </button>
             </div>
           </form>
