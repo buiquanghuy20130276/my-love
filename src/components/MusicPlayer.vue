@@ -5,8 +5,14 @@ import { supabase } from '../lib/supabaseClient'
 const musicUrl = ref('')
 const musicTitle = ref('')
 const isPlaying = ref(false)
+const isExpanded = ref(false)
 const audioRef = ref<HTMLAudioElement | null>(null)
 const activeListener = ref<(() => void) | null>(null)
+
+function handleDiscClick() {
+  togglePlay()
+  isExpanded.value = true
+}
 
 async function fetchMusicSettings() {
   try {
@@ -107,7 +113,8 @@ onUnmounted(() => {
 <template>
   <div 
     v-if="musicUrl"
-    class="fixed bottom-22 right-4 z-40 bg-white/80 dark:bg-black/60 backdrop-blur-md border border-border rounded-full p-2 pr-4 flex items-center gap-2.5 shadow-md hover:shadow-lg transition duration-300 group max-w-[200px]"
+    class="fixed bottom-24 right-4 md:right-[calc(50%-190px)] z-[60] bg-[#FDFBF7]/90 dark:bg-[#1F1C18]/90 backdrop-blur-md border border-[#EBE6DC] dark:border-transparent rounded-full p-1 flex items-center shadow-lg hover:shadow-xl transition-all duration-500 ease-in-out select-none group"
+    :class="isExpanded ? 'pr-3 gap-2 max-w-[240px]' : 'pr-1 max-w-[42px]'"
   >
     <!-- Hidden Audio Element -->
     <audio 
@@ -118,36 +125,55 @@ onUnmounted(() => {
       @pause="handleAudioPause"
     ></audio>
 
-    <!-- Vinyl Disc (Spinning CD) -->
+    <!-- Vinyl Disc (Spinning CD) - w-8 h-8 -->
     <div 
-      @click="togglePlay"
-      class="w-10 h-10 rounded-full bg-neutral-900 border border-black flex items-center justify-center cursor-pointer shadow-inner relative flex-shrink-0 select-none"
+      @click="handleDiscClick"
+      class="w-8 h-8 rounded-full bg-[#1A1816] border border-neutral-900 flex items-center justify-center cursor-pointer shadow-md relative flex-shrink-0 select-none transition-transform hover:scale-105 duration-300"
       :class="isPlaying ? 'animate-spin-slow' : ''"
     >
       <!-- Vinyl Lines -->
       <div class="absolute inset-1 rounded-full border border-neutral-800/40"></div>
       <div class="absolute inset-2 rounded-full border border-neutral-700/30"></div>
       <!-- Center Sticker -->
-      <div class="w-3.5 h-3.5 rounded-full bg-romantic-300 dark:bg-rosewood-800 flex items-center justify-center">
+      <div class="w-2.5 h-2.5 rounded-full bg-romantic-300 dark:bg-rosewood-800 flex items-center justify-center">
         <!-- Spindle Hole -->
-        <div class="w-1 h-1 rounded-full bg-white"></div>
+        <div class="w-0.5 h-0.5 rounded-full bg-[#FDFBF7]"></div>
       </div>
       
       <!-- Play/Pause Overlay -->
-      <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 rounded-full flex items-center justify-center transition">
-        <i v-if="isPlaying" class="ti ti-pause text-white text-xs"></i>
-        <i v-else class="ti ti-player-play-filled text-white text-xs"></i>
+      <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 rounded-full flex items-center justify-center transition duration-300">
+        <i v-if="isPlaying" class="ti ti-pause text-white text-[9px]"></i>
+        <i v-else class="ti ti-player-play-filled text-white text-[9px]"></i>
       </div>
+      
+      <!-- Blinking Pulse indicator when paused -->
+      <div 
+        v-if="!isPlaying" 
+        class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 border border-[#FDFBF7] dark:border-neutral-800 animate-pulse"
+      ></div>
     </div>
 
-    <!-- Song Info -->
-    <div class="min-w-0 flex flex-col justify-center cursor-pointer select-none" @click="togglePlay">
-      <p class="text-[10px] font-bold text-gray-900 dark:text-gray-100 truncate w-[100px] leading-tight">
-        {{ musicTitle }}
-      </p>
-      <p class="text-[8px] text-text-muted leading-tight mt-0.5 uppercase tracking-wider font-semibold">
-        {{ isPlaying ? 'Đang phát' : 'Tạm dừng' }}
-      </p>
+    <!-- Song Info & Controls (slide-out container) -->
+    <div 
+      class="flex items-center justify-between min-w-0 transition-all duration-500 ease-in-out flex-1"
+      :class="isExpanded ? 'opacity-100 w-auto pointer-events-auto' : 'opacity-0 w-0 overflow-hidden pointer-events-none'"
+    >
+      <div class="min-w-0 flex flex-col justify-center cursor-pointer flex-1 mr-2" @click="togglePlay">
+        <p class="text-[9px] font-bold text-gray-900 dark:text-gray-100 truncate w-[100px] leading-tight">
+          {{ musicTitle }}
+        </p>
+        <p class="text-[7px] text-text-muted leading-tight mt-0.5 uppercase tracking-wider font-semibold">
+          {{ isPlaying ? 'Đang phát' : 'Tạm dừng' }}
+        </p>
+      </div>
+
+      <!-- Collapse Trigger Button -->
+      <button 
+        @click.stop="isExpanded = false"
+        class="text-text-muted hover:text-gray-900 dark:hover:text-gray-100 cursor-pointer p-0.5 transition duration-300 flex items-center justify-center"
+      >
+        <i class="ti ti-chevron-right text-xs"></i>
+      </button>
     </div>
   </div>
 </template>

@@ -173,6 +173,13 @@ function isVideoUrl(url: string): boolean {
   return VIDEO_EXTS.test(url)
 }
 
+function isVideo(item: PreviewItem): boolean {
+  if (item.file) {
+    return item.file.type.startsWith('video/')
+  }
+  return isVideoUrl(item.url)
+}
+
 // ─── Unified media helpers (returns {tag, attrs}) for <component :is> ────────
 function getGridMediaProps(url: string) {
   if (!url) return { tag: 'img', attrs: { src: '', class: '' } }
@@ -207,7 +214,7 @@ function getDetailMediaProps(url: string) {
 
 function getComposerMediaProps(item: PreviewItem) {
   if (!item) return { tag: 'img', attrs: { src: '', class: '' } }
-  if (isVideoUrl(item.url)) {
+  if (isVideo(item)) {
     return {
       tag: 'video',
       attrs: {
@@ -468,7 +475,7 @@ function handleTouchMove(e: TouchEvent) {
 function startCropImage(idx: number) {
   const item = previewItems.value[idx]
   // Skip crop editor for videos
-  if (isVideoUrl(item.url)) return
+  if (isVideo(item)) return
   
   selectedPreviewIndex.value = idx
   // Always strip hash transform fragment so we load the pure original image
@@ -1089,9 +1096,9 @@ onUnmounted(() => {
 
           <!-- Images custom layout -->
           <div v-if="post.images && post.images.length > 0" class="mt-2">
-            <!-- 1 Image -->
-            <div v-if="post.images.length === 1" class="relative rounded-xl overflow-hidden max-h-60 border border-border">
-              <img v-bind="getGridImageProps(post.images[0])" class="w-full h-full object-cover" />
+            <!-- 1 Image / Video -->
+            <div v-if="post.images.length === 1" class="relative rounded-xl overflow-hidden h-60 border border-border">
+              <component :is="getGridMediaProps(post.images[0]).tag" v-bind="getGridMediaProps(post.images[0]).attrs" />
             </div>
 
             <!-- 2 Images -->
@@ -1570,8 +1577,8 @@ onUnmounted(() => {
 
             <!-- Image layouts mapping -->
             <div v-if="activePost.images && activePost.images.length > 0" class="mt-2">
-              <div v-if="activePost.images.length === 1" class="relative rounded-xl overflow-hidden max-h-56 border border-border">
-                <img v-bind="getDetailImageProps(activePost.images[0])" class="w-full h-full object-cover" />
+              <div v-if="activePost.images.length === 1" class="relative rounded-xl overflow-hidden h-60 border border-border">
+                <component :is="getDetailMediaProps(activePost.images[0]).tag" v-bind="getDetailMediaProps(activePost.images[0]).attrs" />
               </div>
               <div v-else-if="activePost.images.length === 2">
                 <div v-if="activePost.layout_type === 'grid-equal'" class="grid grid-cols-2 gap-1 h-36 rounded-xl overflow-hidden border border-border">
