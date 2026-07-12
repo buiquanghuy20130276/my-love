@@ -10,6 +10,12 @@ export function compressVideo(file: File, targetBitrate: number = 4000000): Prom
       return
     }
 
+    if (file.size <= 10 * 1024 * 1024) {
+      console.log('Video size is under 10MB, skipping compression to preserve original quality and save time.')
+      resolve(file)
+      return
+    }
+
     console.log(`Starting client-side video compression for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`)
 
     // Create a hidden video element

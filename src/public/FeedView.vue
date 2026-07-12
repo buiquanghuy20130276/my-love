@@ -168,7 +168,7 @@ function getComposerPreviewProps(item: PreviewItem) {
 }
 
 // ─── Video detection ────────────────────────────────────────────────────────
-const VIDEO_EXTS = /\.(mp4|webm|mov|avi|mkv|m4v|ogv)(#.*)?$/i
+const VIDEO_EXTS = /\.(mp4|webm|mov|quicktime|qt|avi|mkv|m4v|ogv)(#.*)?$/i
 function isVideoUrl(url: string): boolean {
   if (!url) return false
   return VIDEO_EXTS.test(url)
@@ -259,6 +259,14 @@ const postContent = ref('')
 const previewItems = ref<PreviewItem[]>([])
 const layoutType = ref<'grid-equal' | 'left-large' | 'top-large'>('grid-equal')
 const submittingPost = ref(false)
+
+// Background Upload States
+const isBackgroundUploading = ref(false)
+const backgroundContent = ref('')
+const backgroundPreviewItems = ref<PreviewItem[]>([])
+const backgroundLayoutType = ref<'grid-equal' | 'left-large' | 'top-large'>('grid-equal')
+const backgroundIsEditing = ref(false)
+const backgroundEditingPostId = ref<string | null>(null)
 
 // Edit comment states
 const editingCommentId = ref<string | null>(null)
@@ -755,18 +763,43 @@ function removePreview(idx: number) {
   previewItems.value.splice(idx, 1)
 }
 
-// Create or update post
+// Create or update post (Background Task version)
 async function publishPost() {
   if (!postContent.value.trim() && previewItems.value.length === 0) {
     toast.error('Nội dung bài viết không được để trống!')
     return
   }
-  submittingPost.value = true
+  if (isBackgroundUploading.value) {
+    toast.warning('Vui lòng đợi bài đăng trước hoàn tất nhé!')
+    return
+  }
+
+  // 1. Copy states to background worker
+  backgroundContent.value = postContent.value
+  backgroundPreviewItems.value = [...previewItems.value]
+  backgroundLayoutType.value = layoutType.value
+  backgroundIsEditing.value = isEditing.value
+  backgroundEditingPostId.value = editingPostId.value
+
+  isBackgroundUploading.value = true
+  toast.success('Đang đăng bài viết ở chế độ nền! Bạn có thể tiếp tục xem bảng tin. 🚀')
+
+  // 2. Reset composer modal immediately so user doesn't wait
+  showComposeModal.value = false
+  postContent.value = ''
+  previewItems.value = []
+  layoutType.value = 'grid-equal'
+  isEditing.value = false
+  editingPostId.value = null
+
+  // 3. Trigger background upload process
+  runBackgroundUpload()
+}
+
+async function runBackgroundUpload() {
   try {
-    const finalImages: string[] = []
-    
-    // Process preview items in order
-    for (const item of previewItems.value) {
+    // Process preview items in parallel
+    const uploadPromises = backgroundPreviewItems.value.map(async (item) => {
       let publicUrl = ''
       if (item.file) {
         const isVid = item.file.type.startsWith('video/')
@@ -775,9 +808,6 @@ async function publishPost() {
         let ext: string
 
         if (isVid) {
-          // Show compressing toast
-          const videoToastId = toast.loading('Đang tối ưu hóa dung lượng video... ⏳')
-          
           try {
             uploadBlob = await compressVideo(item.file)
           } catch (err) {
@@ -785,12 +815,14 @@ async function publishPost() {
             uploadBlob = item.file
           }
           
-          toast.dismiss(videoToastId)
-          
           contentType = uploadBlob.type || 'video/mp4'
-          // Extract file extension cleanly
-          ext = contentType.split('/').pop()?.split(';')[0] || 'mp4'
-          if (ext === 'x-matroska') ext = 'mkv'
+          if (uploadBlob instanceof File) {
+            ext = item.file.name.split('.').pop()?.toLowerCase() || 'mp4'
+          } else {
+            ext = contentType.split('/').pop()?.split(';')[0] || 'mp4'
+            if (ext === 'quicktime') ext = 'mov'
+            if (ext === 'x-matroska') ext = 'mkv'
+          }
         } else {
           // Compress image to webp
           uploadBlob = await compressImage(item.file)
@@ -822,22 +854,24 @@ async function publishPost() {
       const transformHash = (!isVidUrl && item.transform)
         ? `#scale=${item.transform.scale}&x=${item.transform.x}&y=${item.transform.y}` 
         : ''
-      finalImages.push(publicUrl + transformHash)
-    }
+      return publicUrl + transformHash
+    })
 
-    if (isEditing.value && editingPostId.value) {
+    const finalImages = await Promise.all(uploadPromises)
+
+    if (backgroundIsEditing.value && backgroundEditingPostId.value) {
       // Update Post
       const { error } = await supabase
         .from('love_feed_posts')
         .update({
-          content: postContent.value.trim() || null,
+          content: backgroundContent.value.trim() || null,
           images: finalImages,
-          layout_type: layoutType.value
+          layout_type: backgroundLayoutType.value
         })
-        .eq('id', editingPostId.value)
+        .eq('id', backgroundEditingPostId.value)
 
       if (error) throw error
-      toast.success('Cập nhật bài viết thành công!')
+      toast.success('Cập nhật bài viết thành công! 🎉')
     } else {
       // Create Post
       const { error } = await supabase
@@ -846,32 +880,29 @@ async function publishPost() {
           user_id: authStore.user?.id,
           author_name: profilesMap.value[authStore.user?.id || '']?.display_name || 'User',
           author_avatar_url: profilesMap.value[authStore.user?.id || '']?.avatar_url || null,
-          content: postContent.value.trim() || null,
+          content: backgroundContent.value.trim() || null,
           images: finalImages,
-          layout_type: layoutType.value
+          layout_type: backgroundLayoutType.value
         })
 
       if (error) throw error
-      toast.success('Đăng bài thành công!')
+      toast.success('Đăng bài mới thành công! 🎉')
     }
 
-    // Reset state
-    showComposeModal.value = false
-    postContent.value = ''
-    previewItems.value.forEach(item => {
+    // Refresh feed immediately to guarantee display after posting
+    await fetchFeed()
+  } catch (err: any) {
+    toast.error('Lỗi khi tải bài viết lên: ' + err.message)
+  } finally {
+    // Revoke background object URLs
+    backgroundPreviewItems.value.forEach(item => {
       if (item.file) URL.revokeObjectURL(item.url)
       if (item.originalFile && item.originalUrl !== item.url) {
         URL.revokeObjectURL(item.originalUrl)
       }
     })
-    previewItems.value = []
-    layoutType.value = 'grid-equal'
-    isEditing.value = false
-    editingPostId.value = null
-  } catch (err: any) {
-    toast.error('Lỗi khi đăng bài: ' + err.message)
-  } finally {
-    submittingPost.value = false
+    backgroundPreviewItems.value = []
+    isBackgroundUploading.value = false
   }
 }
 
@@ -1287,6 +1318,26 @@ onUnmounted(() => {
       </div>
 
     </div>
+
+    <!-- Background Uploading Progress Widget -->
+    <transition name="fade">
+      <div 
+        v-if="isBackgroundUploading"
+        class="fixed bottom-24 left-4 z-40 bg-[#FDFBF7]/95 dark:bg-[#1F1C18]/95 backdrop-blur-md border border-cream-200 dark:border-cream-950/40 rounded-2xl p-3 flex items-center gap-3 shadow-lg select-none max-w-[220px]"
+      >
+        <div class="relative flex-shrink-0 w-8 h-8 rounded-lg overflow-hidden bg-cream-100 dark:bg-neutral-850 flex items-center justify-center border border-cream-200 dark:border-cream-950/40">
+          <i class="ti ti-upload text-romantic-500 text-sm animate-bounce"></i>
+        </div>
+        <div class="min-w-0 flex flex-col justify-center">
+          <p class="text-[9px] font-bold text-gray-900 dark:text-gray-100 truncate leading-tight">
+            Đang đăng bài viết...
+          </p>
+          <p class="text-[7px] text-text-muted leading-tight mt-0.5 uppercase tracking-wider font-semibold animate-pulse">
+            Vui lòng chờ ⏳
+          </p>
+        </div>
+      </div>
+    </transition>
 
     <!-- COMPOSE MODAL (Pop up for writing / editing post) -->
     <transition name="fade">
